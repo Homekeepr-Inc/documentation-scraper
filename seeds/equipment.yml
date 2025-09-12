@@ -1,0 +1,197 @@
+# Comprehensive home equipment categories and brands
+
+appliances:
+  kitchen:
+    - refrigerator
+    - dishwasher
+    - range
+    - cooktop
+    - oven
+    - microwave
+    - garbage_disposal
+    - range_hood
+    - ice_maker
+  laundry:
+    - washer
+    - dryer
+    - combo_unit
+  other:
+    - water_heater
+    - water_softener
+    - dehumidifier
+
+hvac:
+  heating:
+    - furnace
+    - boiler
+    - heat_pump
+    - baseboard_heater
+    - radiant_heating
+  cooling:
+    - central_air
+    - mini_split
+    - window_ac
+    - evaporative_cooler
+  ventilation:
+    - exhaust_fan
+    - whole_house_fan
+    - hrv
+    - erv
+  controls:
+    - thermostat
+    - zone_control
+    - damper
+
+electrical:
+  panels:
+    - electrical_panel
+    - subpanel
+    - transfer_switch
+  devices:
+    - outlet
+    - switch
+    - gfci
+    - afci
+    - surge_protector
+  lighting:
+    - led_fixture
+    - smart_switch
+    - dimmer
+
+plumbing:
+  fixtures:
+    - toilet
+    - sink
+    - faucet
+    - shower
+    - bathtub
+  systems:
+    - water_pump
+    - pressure_tank
+    - sump_pump
+    - sewage_pump
+    - backflow_preventer
+
+roofing:
+  materials:
+    - standing_seam
+    - asphalt_shingle
+    - tile_roof
+    - metal_roofing
+  components:
+    - gutter
+    - downspout
+    - flashing
+    - ridge_vent
+    - soffit_vent
+
+solar:
+  panels:
+    - solar_panel
+    - solar_module
+  inverters:
+    - microinverter
+    - string_inverter
+    - power_optimizer
+  mounting:
+    - rail_system
+    - clamp
+    - grounding
+  monitoring:
+    - production_monitor
+    - consumption_monitor
+
+security:
+  systems:
+    - alarm_panel
+    - motion_detector
+    - door_sensor
+    - camera
+    - doorbell_camera
+  access:
+    - garage_door_opener
+    - smart_lock
+    - keypad
+
+outdoor:
+  irrigation:
+    - sprinkler_controller
+    - valve
+    - drip_system
+  equipment:
+    - pool_pump
+    - pool_heater
+    - hot_tub
+    - generator
+    - outdoor_lighting
+
+# Major brands by category
+brands:
+  appliances:
+    - whirlpool
+    - ge
+    - lg
+    - samsung
+    - frigidaire
+    - electrolux
+    - bosch
+    - maytag
+    - kitchenaid
+    - kenmore
+    - viking
+    - thermador
+    - subzero
+    - wolf
+  hvac:
+    - carrier
+    - trane
+    - lennox
+    - rheem
+    - goodman
+    - york
+    - american_standard
+    - bryant
+    - payne
+    - mitsubishi
+    - daikin
+    - fujitsu
+  solar:
+    - enphase
+    - solaredge
+    - sma
+    - fronius
+    - abb
+    - huawei
+    - sungrow
+    - generac
+  electrical:
+    - square_d
+    - siemens
+    - eaton
+    - cutler_hammer
+    - general_electric
+    - leviton
+    - lutron
+  plumbing:
+    - kohler
+    - moen
+    - delta
+    - american_standard
+    - grohe
+    - hansgrohe
+    - pfister
+    - gerber
+  roofing:
+    - owens_corning
+    - gaf
+    - certainteed
+    - tamko
+    - iko
+    - atlas
+  security:
+    - honeywell
+    - adt
+    - ring
+    - nest
+    - simplisafe
+    - vivint
