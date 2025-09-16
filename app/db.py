@@ -27,10 +27,6 @@ def init_db() -> None:
     conn = get_db()
     cur = conn.cursor()
 
-    # Drop and recreate table to ensure schema is correct
-    cur.execute("DROP TABLE IF EXISTS documents_fts;")
-    cur.execute("DROP TABLE IF EXISTS documents;")
-
     cur.execute(
         """
         CREATE TABLE IF NOT EXISTS documents (
