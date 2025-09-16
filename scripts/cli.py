@@ -169,25 +169,28 @@ def crawl_sitemaps():
     stats()
 
 
-def crawl_ge_headless(model="CFE28TSHFSS"):
+def crawl_ge_headless(models="CFE28TSHFSS"):
     """Crawl GE appliance parts using headless browser scraper."""
     import os
     import subprocess
-    
-    print(f"🌐 Starting headless GE scrape for model: {model}")
-    
-    env = os.environ.copy()
-    env["PYTHONPATH"] = "."
-    cmd = [
-        "python3", "headless-browser-scraper/ge_headless_scraper.py", model
-    ]
-    try:
-        subprocess.run(cmd, env=env, check=False, timeout=300)  # 5 min timeout
-    except subprocess.TimeoutExpired:
-        print(f"⏱️ Headless GE scrape timed out")
-    except Exception as e:
-        print(f"❌ Headless GE scrape error: {e}")
-    
+
+    model_list = [m.strip() for m in models.split(',')]
+
+    for model in model_list:
+        print(f"🌐 Starting headless GE scrape for model: {model}")
+
+        env = os.environ.copy()
+        env["PYTHONPATH"] = "."
+        cmd = [
+            "python3", "headless-browser-scraper/ge_headless_scraper.py", model
+        ]
+        try:
+            subprocess.run(cmd, env=env, check=False, timeout=300)  # 5 min timeout
+        except subprocess.TimeoutExpired:
+            print(f"⏱️ Headless GE scrape for {model} timed out")
+        except Exception as e:
+            print(f"❌ Headless GE scrape for {model} error: {e}")
+
     print("\n✅ Headless GE scrape complete!")
     stats()
 
@@ -425,8 +428,8 @@ def main():
     elif cmd == "sitemaps":
         crawl_sitemaps()
     elif cmd == "headless-ge":
-        model = sys.argv[2] if len(sys.argv) > 2 else "CFE28TSHFSS"
-        crawl_ge_headless(model)
+        models = sys.argv[2] if len(sys.argv) > 2 else "CFE28TSHFSS"
+        crawl_ge_headless(models)
     elif cmd == "targeted":
         brand = sys.argv[2] if len(sys.argv) > 2 else "whirlpool"
         doc_type = sys.argv[3] if len(sys.argv) > 3 else "tech_sheet"

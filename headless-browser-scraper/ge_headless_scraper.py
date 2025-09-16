@@ -21,6 +21,11 @@ from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 from bs4 import BeautifulSoup, Tag
 import requests
+from difflib import SequenceMatcher
+
+
+def similar(a, b):
+    return SequenceMatcher(None, a, b).ratio()
 
 
 def scrape_ge_manual(model):
@@ -33,7 +38,7 @@ def scrape_ge_manual(model):
     Returns:
         dict: Scraped data or None if not found
     """
-    url = f"https://www.geapplianceparts.com/store/parts/assembly/{model}"
+    url = f"https://www.geapplianceparts.com/store/parts/assembly/{model}.html"
 
     # Launch undetected Chrome in headless mode
     options = uc.ChromeOptions()
@@ -49,6 +54,7 @@ def scrape_ge_manual(model):
     try:
         print(f"Fetching page for model {model}...")
         driver.get(url)
+        print(f"Current URL: {driver.current_url}")
 
         # Wait for the page to load
         WebDriverWait(driver, 10).until(
@@ -61,15 +67,12 @@ def scrape_ge_manual(model):
         soup = BeautifulSoup(page_source, 'html.parser')
 
         # Check if we landed on an error page
-        # This happens if an incomplete model number is passed i.e GFE28GYNFS, which is
-        # a generic model number, rather than a specific model in that series i.e GFE28GYNBFS.
-        # The difference between different series model numbers for one type of product usually
-        # is manufacturer specific, and they all share the same owners manual, so we can safely
-        # fetch the first owners manual from the list of series model numbers lineup.
         error_h1 = soup.find('h1', string=re.compile(r"Uh-oh! There.s A Problem", re.IGNORECASE))
         if error_h1:
+            print("Landed on an error page, performing a keyword search...")
             search_url = f"https://www.geapplianceparts.com/store/parts/KeywordSearch?q={model}"
             driver.get(search_url)
+            print(f"Current URL: {driver.current_url}")
 
             # Wait for the search results to load and re-parse the page
             WebDriverWait(driver, 10).until(EC.presence_of_element_located((By.TAG_NAME, "body")))
@@ -77,61 +80,77 @@ def scrape_ge_manual(model):
             page_source = driver.page_source
             soup = BeautifulSoup(page_source, 'html.parser')
 
-            # Find all rows that could contain model info
-            model_rows = soup.find_all('div', class_='row')
-            target_row = None
-            for row in model_rows:
-                # Find an h3 that matches the base model number
-                h3_tag = row.find('h3', string=lambda t: t and t.strip().upper() == model.upper())
-                if h3_tag:
-                    target_row = row
-                    break
+            # Find all potential model links
+            links = soup.find_all('a', href=re.compile(r'/store/parts/assembly/'))
             
-            if target_row:
-                # Find the first link which leads to a more specific model page
-                first_link = target_row.find('p', class_='blue-bullet-before')
-                if first_link:
-                    a_tag = first_link.find('a')
-                    if a_tag and isinstance(a_tag, Tag) and a_tag.get('href'):
-                        specific_model_url = urljoin(driver.current_url, str(a_tag['href']))
-                        driver.get(specific_model_url)
+            best_match_url = None
+            highest_similarity = 0.0
 
-                        # Wait for the final page to load and re-parse
-                        WebDriverWait(driver, 10).until(EC.presence_of_element_located((By.TAG_NAME, "body")))
-                        time.sleep(2)
-                        page_source = driver.page_source
-                        soup = BeautifulSoup(page_source, 'html.parser')
+            for link in links:
+                link_text = link.get_text(strip=True)
+                similarity = similar(model.upper(), link_text.upper())
+                
+                if similarity > highest_similarity:
+                    highest_similarity = similarity
+                    if isinstance(link, Tag) and link.get('href'):
+                         best_match_url = urljoin(driver.current_url, str(link['href']))
 
-        # Find PDF links
+            if highest_similarity >= 0.75 and best_match_url:
+                print(f"Found a model with {highest_similarity:.2f} similarity. Navigating to: {best_match_url}")
+                driver.get(best_match_url)
+                print(f"Current URL: {driver.current_url}")
+
+                # Wait for the final page to load and re-parse
+                WebDriverWait(driver, 10).until(EC.presence_of_element_located((By.TAG_NAME, "body")))
+                time.sleep(2)
+                page_source = driver.page_source
+                soup = BeautifulSoup(page_source, 'html.parser')
+            else:
+                print("Could not find a sufficiently similar model link in search results.")
+
+
+        # Find all PDF links
         pdf_links = soup.find_all('a', href=re.compile(r'\.pdf$'))
 
         if not pdf_links:
             print("No PDF links found on the page.")
             return None
 
-        # Assume the first PDF is the owner's manual (or filter by text)
-        pdf_link = pdf_links[0]
-        if isinstance(pdf_link, Tag):
-            href = pdf_link.get('href')
-            if href:
-                pdf_url = urljoin(driver.current_url, str(href))
+        results = []
+        for pdf_link in pdf_links:
+            if isinstance(pdf_link, Tag):
+                href = pdf_link.get('href')
+                if href:
+                    pdf_url = urljoin(driver.current_url, str(href))
+                else:
+                    continue
             else:
-                return None
-        else:
-            return None
-        title = pdf_link.get_text(strip=True) or "Owner's Manual"
+                continue
+            
+            title = pdf_link.get_text(strip=True) or "Owner's Manual"
+            
+            # Determine doc_type from title
+            doc_type = 'owner'
+            if 'install' in title.lower():
+                doc_type = 'installation'
+            elif 'use and care' in title.lower():
+                doc_type = 'owner'
+            elif 'service' in title.lower():
+                doc_type = 'service'
 
-        print(f"Found PDF: {title}")
-        print(f"URL: {pdf_url}")
+            print(f"Found PDF: {title}")
+            print(f"URL: {pdf_url}")
 
-        return {
-            'brand': 'ge',
-            'model_number': model,
-            'doc_type': 'owner',
-            'title': title,
-            'source_url': driver.current_url,
-            'file_url': pdf_url,
-        }
+            results.append({
+                'brand': 'ge',
+                'model_number': model,
+                'doc_type': doc_type,
+                'title': title,
+                'source_url': driver.current_url,
+                'file_url': pdf_url,
+            })
+        
+        return results
 
     except Exception as e:
         print(f"Error scraping {model}: {e}")
@@ -182,14 +201,15 @@ def main():
         print("Model number cannot be empty.")
         sys.exit(1)
 
-    result = scrape_ge_manual(model)
-    if result:
+    results = scrape_ge_manual(model)
+    if results:
         print("Scraping successful!")
-        print(result)
-        # Optionally ingest
-        ingest_result = ingest_ge_manual(result)
-        if ingest_result:
-            print(f"Ingested with ID: {ingest_result.id}")
+        for result in results:
+            print(result)
+            # Optionally ingest
+            ingest_result = ingest_ge_manual(result)
+            if ingest_result:
+                print(f"Ingested with ID: {ingest_result.id}")
     else:
         print("Scraping failed.")
 
