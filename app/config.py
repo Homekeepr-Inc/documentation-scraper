@@ -6,7 +6,7 @@ import os
 from pathlib import Path
 
 # Storage Configuration
-DEFAULT_BLOB_ROOT = Path.home() / "home-manuals"
+DEFAULT_BLOB_ROOT = Path("./data/storage")
 BLOB_ROOT = Path(os.environ.get("BLOB_ROOT", str(DEFAULT_BLOB_ROOT)))
 
 DEFAULT_DB_PATH = Path("./data/manuals.db")
