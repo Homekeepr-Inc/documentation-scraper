@@ -5,14 +5,16 @@ LG Appliance Manuals Headless Scraper
 Uses undetected-chromedriver for stealthy headless scraping to avoid bot detection.
 Extracts owner's manual PDFs from lg.com.
 
-Usage: python3 lg_scraper.py <model_number>
+Usage: python3 lg_scraper.py <model_number1> <model_number2> ...
 
-Example: python3 lg_scraper.py LMXS28626S
+Example: python3 lg_scraper.py LMXS28626S CFE28TSHFSS
 """
 
 import re
 import sys
 import time
+import queue
+import threading
 from urllib.parse import urljoin
 
 import undetected_chromedriver as uc
@@ -21,6 +23,10 @@ from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 from bs4 import BeautifulSoup, Tag
 import requests
+
+# Global queue and lock for single-instance control
+job_queue = queue.Queue()
+scraper_lock = threading.Lock()
 
 def scrape_lg_manual(model):
     """
@@ -116,6 +122,33 @@ def scrape_lg_manual(model):
     finally:
         driver.quit()
 
+def worker():
+    """Worker thread to process jobs from the queue."""
+    while True:
+        try:
+            model = job_queue.get(timeout=1)  # Wait for a job
+        except queue.Empty:
+            break  # No more jobs
+
+        with scraper_lock:  # Ensure only one instance runs at a time
+            print(f"Starting scrape for {model}")
+            result = scrape_lg_manual(model)
+            if result:
+                print("Scraping successful!")
+                print(result)
+                # Optionally ingest
+                ingest_result = ingest_lg_manual(result)
+                if ingest_result:
+                    print(f"Ingested with ID: {ingest_result.id}")
+            else:
+                print("Scraping failed.")
+        job_queue.task_done()
+
+def enqueue_models(models):
+    """Enqueue model numbers into the job queue."""
+    for model in models:
+        job_queue.put(model.strip())
+
 def download_file(url, filename):
     """Download a file from URL to local filename."""
     try:
@@ -144,27 +177,29 @@ def ingest_lg_manual(result):
         source_url=result['source_url'],
         file_url=result['file_url']
     )
-
 def main():
-    if len(sys.argv) != 2:
-        print("Usage: python3 lg_scraper.py <model_number>")
+    if len(sys.argv) < 2:
+        print("Usage: python3 lg_scraper.py <model_number1> <model_number2> ...")
         sys.exit(1)
 
-    model = sys.argv[1].strip()
-    if not model:
-        print("Model number cannot be empty.")
+    models = sys.argv[1:]
+    if not models or any(not model.strip() for model in models):
+        print("Model numbers cannot be empty.")
         sys.exit(1)
 
-    result = scrape_lg_manual(model)
-    if result:
-        print("Scraping successful!")
-        print(result)
-        # Optionally ingest
-        ingest_result = ingest_lg_manual(result)
-        if ingest_result:
-            print(f"Ingested with ID: {ingest_result.id}")
-    else:
-        print("Scraping failed.")
+    # Enqueue models
+    enqueue_models(models)
+
+    # Start worker thread
+    worker_thread = threading.Thread(target=worker)
+    worker_thread.start()
+
+    # Wait for all jobs to complete
+    job_queue.join()
+    worker_thread.join()
+
+    print("All jobs completed.")
+
 
 if __name__ == "__main__":
     main()
