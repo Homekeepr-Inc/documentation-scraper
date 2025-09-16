@@ -50,19 +50,57 @@ def scrape_ge_manual(model):
         print(f"Fetching page for model {model}...")
         driver.get(url)
 
-        # Wait for the page to load (adjust timeout as needed)
+        # Wait for the page to load
         WebDriverWait(driver, 10).until(
             EC.presence_of_element_located((By.TAG_NAME, "body"))
         )
-
-        # Give extra time for dynamic content
         time.sleep(2)
 
-        # Get the page source
+        # Get the page source and parse it
         page_source = driver.page_source
-
-        # Parse with BeautifulSoup
         soup = BeautifulSoup(page_source, 'html.parser')
+
+        # Check if we landed on an error page
+        # This happens if an incomplete model number is passed i.e GFE28GYNFS, which is
+        # a generic model number, rather than a specific model in that series i.e GFE28GYNBFS.
+        # The difference between different series model numbers for one type of product usually
+        # is manufacturer specific, and they all share the same owners manual, so we can safely
+        # fetch the first owners manual from the list of series model numbers lineup.
+        error_h1 = soup.find('h1', string=re.compile(r"Uh-oh! There.s A Problem", re.IGNORECASE))
+        if error_h1:
+            search_url = f"https://www.geapplianceparts.com/store/parts/KeywordSearch?q={model}"
+            driver.get(search_url)
+
+            # Wait for the search results to load and re-parse the page
+            WebDriverWait(driver, 10).until(EC.presence_of_element_located((By.TAG_NAME, "body")))
+            time.sleep(2)
+            page_source = driver.page_source
+            soup = BeautifulSoup(page_source, 'html.parser')
+
+            # Find all rows that could contain model info
+            model_rows = soup.find_all('div', class_='row')
+            target_row = None
+            for row in model_rows:
+                # Find an h3 that matches the base model number
+                h3_tag = row.find('h3', string=lambda t: t and t.strip().upper() == model.upper())
+                if h3_tag:
+                    target_row = row
+                    break
+            
+            if target_row:
+                # Find the first link which leads to a more specific model page
+                first_link = target_row.find('p', class_='blue-bullet-before')
+                if first_link:
+                    a_tag = first_link.find('a')
+                    if a_tag and isinstance(a_tag, Tag) and a_tag.get('href'):
+                        specific_model_url = urljoin(driver.current_url, str(a_tag['href']))
+                        driver.get(specific_model_url)
+
+                        # Wait for the final page to load and re-parse
+                        WebDriverWait(driver, 10).until(EC.presence_of_element_located((By.TAG_NAME, "body")))
+                        time.sleep(2)
+                        page_source = driver.page_source
+                        soup = BeautifulSoup(page_source, 'html.parser')
 
         # Find PDF links
         pdf_links = soup.find_all('a', href=re.compile(r'\.pdf$'))
@@ -76,12 +114,10 @@ def scrape_ge_manual(model):
         if isinstance(pdf_link, Tag):
             href = pdf_link.get('href')
             if href:
-                pdf_url = urljoin(url, str(href))
+                pdf_url = urljoin(driver.current_url, str(href))
             else:
-                print("No href found in PDF link.")
                 return None
         else:
-            print("PDF link is not a Tag.")
             return None
         title = pdf_link.get_text(strip=True) or "Owner's Manual"
 
@@ -93,7 +129,7 @@ def scrape_ge_manual(model):
             'model_number': model,
             'doc_type': 'owner',
             'title': title,
-            'source_url': url,
+            'source_url': driver.current_url,
             'file_url': pdf_url,
         }
 
