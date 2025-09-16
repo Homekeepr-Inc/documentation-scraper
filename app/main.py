@@ -5,6 +5,7 @@ from typing import Optional
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, PlainTextResponse, HTMLResponse
 from fastapi.templating import Jinja2Templates
+from starlette.responses import JSONResponse
 
 from .db import init_db, fetch_document, search_documents
 
@@ -15,6 +16,17 @@ from ge_headless_scraper import scrape_ge_manual, ingest_ge_manual
 templates = Jinja2Templates(directory="app/templates")
 
 app = FastAPI(title="Appliance Manuals API")
+
+# Custom header secret for API protection
+SCRAPER_SECRET = os.getenv("SCRAPER_SECRET")
+
+@app.middleware("http")
+async def check_custom_header(request: Request, call_next):
+    header_value = request.headers.get("X-Homekeepr-Scraper")
+    if header_value != SCRAPER_SECRET:
+        return JSONResponse(status_code=401, content={"detail": "Unauthorized"})
+    response = await call_next(request)
+    return response
 
 
 @app.on_event("startup")
