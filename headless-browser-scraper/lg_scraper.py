@@ -15,6 +15,7 @@ import sys
 import time
 import queue
 import threading
+import os
 from urllib.parse import urljoin
 
 import undetected_chromedriver as uc
@@ -24,6 +25,9 @@ from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.common.action_chains import ActionChains
 from bs4 import BeautifulSoup, Tag
 import requests
+
+# Import config for BLOB_ROOT
+from app.config import DEFAULT_BLOB_ROOT
 
 # Global queue and lock for single-instance control
 job_queue = queue.Queue()
@@ -50,6 +54,15 @@ def scrape_lg_manual(model):
     options.add_argument('--window-size=1920,1080')
     options.add_argument('--disable-popup-blocking')
     options.add_argument('--user-agent=Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36')
+    # Set download preferences
+    download_dir = os.path.abspath(DEFAULT_BLOB_ROOT)
+    os.makedirs(download_dir, exist_ok=True)
+    options.add_experimental_option("prefs", {
+        "download.default_directory": download_dir,
+        "download.prompt_for_download": False,
+        "download.directory_upgrade": True,
+        "plugins.always_open_pdf_externally": True
+    })
 
     driver = uc.Chrome(options=options)
 
@@ -77,25 +90,25 @@ def scrape_lg_manual(model):
             retry_url = f"https://www.lg.com/us/support/product/lg-{model}"
             driver.get(retry_url)
             print(f"Retry URL: {driver.current_url}")
-            time.sleep(5)
+            time.sleep(2)
             # Dismiss consent overlay
             driver.execute_script("const consent = document.getElementById('transcend-consent-manager'); if (consent) consent.style.display = 'none';")
-            time.sleep(2)
+            time.sleep(1)
             # Mouse over element to trigger loading
             try:
                 element = driver.find_element(By.CSS_SELECTOR, ".MuiBox-root:nth-child(3) .MuiButtonBase-root")
                 actions = ActionChains(driver)
                 actions.move_to_element(element).perform()
-                time.sleep(1)
+                time.sleep(0.5)
             except Exception as e:
                 print(f"Mouse over failed: {e}")
             # Scrolling
             driver.execute_script("window.scrollTo(0,5)")
-            time.sleep(1)
+            time.sleep(0.5)
             driver.execute_script("window.scrollTo(0,272)")
-            time.sleep(1)
+            time.sleep(0.5)
             driver.execute_script("window.scrollTo(0,672)")
-            time.sleep(1)
+            time.sleep(0.5)
             page_source = driver.page_source
             soup = BeautifulSoup(page_source, 'html.parser')
             url = retry_url  # Update URL for source_url
@@ -127,36 +140,31 @@ def scrape_lg_manual(model):
                 button = WebDriverWait(driver, 10).until(
                     EC.element_to_be_clickable((By.CSS_SELECTOR, ".MuiPaper-root:nth-child(1) .MuiGrid-root:nth-child(2) > .MuiTypography-root:nth-child(1)"))
                 )
+                print(f"Button tag: {button.tag_name}")
+                print(f"Button text: {button.text}")
+                print(f"Button href: {button.get_attribute('href')}")
+                print(f"Button onclick: {button.get_attribute('onclick')}")
+                attrs = driver.execute_script("return Array.from(arguments[0].attributes).map(attr => ({name: attr.name, value: attr.value}))", button)
+                data_attrs = [attr for attr in attrs if attr['name'].startswith('data')]
+                print(f"Button data attributes: {[attr['name'] for attr in data_attrs]}")
+                for attr in data_attrs:
+                    print(f"  {attr['name']}: {attr['value']}")
                 pdf_url = button.get_attribute('href')
                 if pdf_url:
                     print(f"Got PDF URL from href: {pdf_url}")
                 else:
                     print("No href found, clicking button...")
-                    original_handles = driver.window_handles
                     button.click()
                     print("Clicked PDF download button.")
-                    # Wait for new window
-                    try:
-                        WebDriverWait(driver, 10).until(
-                            lambda d: len(d.window_handles) > len(original_handles)
-                        )
-                        print("New window opened.")
-                    except Exception as e:
-                        print(f"Timeout waiting for new window: {e}")
+                    # Wait for download
+                    time.sleep(3)  # wait for download to complete
+                    downloads = [f for f in os.listdir(download_dir) if f.endswith('.pdf')]
+                    if downloads:
+                        pdf_url = os.path.join(download_dir, downloads[0])
+                        print(f"Downloaded PDF: {pdf_url}")
+                    else:
+                        print("No PDF downloaded")
                         return None
-                    # Switch to new window
-                    new_handle = [h for h in driver.window_handles if h not in original_handles][0]
-                    driver.switch_to.window(new_handle)
-                    # Wait for URL to load
-                    try:
-                        WebDriverWait(driver, 10).until(lambda d: d.current_url != "about:blank")
-                    except:
-                        print("URL remained about:blank")
-                    pdf_url = driver.current_url
-                    print(f"Switched to new window, URL: {pdf_url}")
-                    # Close new window and switch back
-                    driver.close()
-                    driver.switch_to.window(original_handles[0])
             except Exception as e:
                 print(f"Error getting PDF URL: {e}")
                 return None
@@ -170,11 +178,16 @@ def scrape_lg_manual(model):
 
                 # Download and validate PDF
                 try:
-                    response = requests.get(pdf_url, allow_redirects=True)
-                    response.raise_for_status()
-                    content = response.content
+                    if pdf_url.startswith('/'):
+                        # Local file
+                        with open(pdf_url, 'rb') as f:
+                            content = f.read()
+                    else:
+                        response = requests.get(pdf_url, allow_redirects=True)
+                        response.raise_for_status()
+                        content = response.content
                     if not content.startswith(b'%PDF-'):
-                        print(f"Downloaded file is not a PDF. First bytes: {content[:10]}")
+                        print(f"File is not a PDF. First bytes: {content[:10]}")
                         return None
                     print("Validated as PDF.")
                 except Exception as e:

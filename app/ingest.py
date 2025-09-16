@@ -61,9 +61,15 @@ def ingest_from_url(brand: str, model_number: str, doc_type: str, title: str, so
         return IngestResult(id=None, sha256=existing[0], pages=existing[1], size_bytes=existing[2], english_present=bool(existing[3]))
     
     logger.info(f"Downloading PDF: {file_url}")
-    resp = requests.get(file_url, timeout=15)  # Reduced timeout
-    resp.raise_for_status()
-    pdf_bytes = resp.content
+    http_status = 200  # Default for local files
+    if file_url.startswith('/'):
+        with open(file_url, 'rb') as f:
+            pdf_bytes = f.read()
+    else:
+        resp = requests.get(file_url, timeout=15)  # Reduced timeout
+        resp.raise_for_status()
+        http_status = resp.status_code
+        pdf_bytes = resp.content
     size_bytes = len(pdf_bytes)
     sha = _sha256_bytes(pdf_bytes)
     
@@ -102,7 +108,7 @@ def ingest_from_url(brand: str, model_number: str, doc_type: str, title: str, so
         "ocr_applied": 0,
         "english_present": 1 if english else 0,
         "status": "ok",
-        "http_status": resp.status_code,
+        "http_status": http_status,
         "local_path": str(pdf_path),
         "text_path": str(text_path),
         "text": text,
