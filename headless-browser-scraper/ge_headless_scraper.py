@@ -10,6 +10,7 @@ Usage: python3 ge_headless_scraper.py <model_number>
 Example: python3 ge_headless_scraper.py CFE28TSHFSS
 """
 
+import re
 import sys
 import time
 from urllib.parse import urljoin
@@ -18,7 +19,7 @@ import undetected_chromedriver as uc
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
-from bs4 import BeautifulSoup
+from bs4 import BeautifulSoup, Tag
 import requests
 
 
@@ -64,7 +65,7 @@ def scrape_ge_manual(model):
         soup = BeautifulSoup(page_source, 'html.parser')
 
         # Find PDF links
-        pdf_links = soup.find_all('a', href=lambda href: href and href.endswith('.pdf'))
+        pdf_links = soup.find_all('a', href=re.compile(r'\.pdf$'))
 
         if not pdf_links:
             print("No PDF links found on the page.")
@@ -72,16 +73,20 @@ def scrape_ge_manual(model):
 
         # Assume the first PDF is the owner's manual (or filter by text)
         pdf_link = pdf_links[0]
-        pdf_url = urljoin(url, pdf_link['href'])
+        if isinstance(pdf_link, Tag):
+            href = pdf_link.get('href')
+            if href:
+                pdf_url = urljoin(url, str(href))
+            else:
+                print("No href found in PDF link.")
+                return None
+        else:
+            print("PDF link is not a Tag.")
+            return None
         title = pdf_link.get_text(strip=True) or "Owner's Manual"
 
         print(f"Found PDF: {title}")
         print(f"URL: {pdf_url}")
-
-        # Optionally download the PDF
-        download_pdf = input("Download the PDF? (y/n): ").lower().strip()
-        if download_pdf == 'y':
-            download_file(pdf_url, f"{model}_{title.replace(' ', '_')}.pdf")
 
         return {
             'brand': 'ge',
@@ -113,6 +118,24 @@ def download_file(url, filename):
         print(f"Error downloading {url}: {e}")
 
 
+def ingest_ge_manual(result):
+    if not result:
+        return None
+    # Import here to avoid circular imports
+    import sys
+    import os
+    sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
+    from app.ingest import ingest_from_url
+    return ingest_from_url(
+        brand=result['brand'],
+        model_number=result['model_number'],
+        doc_type=result['doc_type'],
+        title=result['title'],
+        source_url=result['source_url'],
+        file_url=result['file_url']
+    )
+
+
 def main():
     if len(sys.argv) != 2:
         print("Usage: python3 ge_headless_scraper.py <model_number>")
@@ -127,6 +150,10 @@ def main():
     if result:
         print("Scraping successful!")
         print(result)
+        # Optionally ingest
+        ingest_result = ingest_ge_manual(result)
+        if ingest_result:
+            print(f"Ingested with ID: {ingest_result.id}")
     else:
         print("Scraping failed.")
 
