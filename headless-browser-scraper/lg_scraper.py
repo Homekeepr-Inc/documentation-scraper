@@ -16,6 +16,7 @@ import time
 import queue
 import threading
 import os
+import random
 from urllib.parse import urljoin
 
 import undetected_chromedriver as uc
@@ -71,8 +72,8 @@ def scrape_lg_manual(model):
         driver.get(url)
         print(f"Current URL: {driver.current_url}")
 
-        # Wait for JS to render (5 seconds)
-        time.sleep(5)
+        # Wait for JS to render
+        time.sleep(random.uniform(0.03, 0.09))
 
         # Get the page source and parse it
         page_source = driver.page_source
@@ -90,25 +91,25 @@ def scrape_lg_manual(model):
             retry_url = f"https://www.lg.com/us/support/product/lg-{model}"
             driver.get(retry_url)
             print(f"Retry URL: {driver.current_url}")
-            time.sleep(2)
+            time.sleep(random.uniform(0.03, 0.09))
             # Dismiss consent overlay
             driver.execute_script("const consent = document.getElementById('transcend-consent-manager'); if (consent) consent.style.display = 'none';")
-            time.sleep(1)
+            time.sleep(random.uniform(0.03, 0.09))
             # Mouse over element to trigger loading
             try:
                 element = driver.find_element(By.CSS_SELECTOR, ".MuiBox-root:nth-child(3) .MuiButtonBase-root")
                 actions = ActionChains(driver)
                 actions.move_to_element(element).perform()
-                time.sleep(0.5)
+                time.sleep(random.uniform(0.03, 0.09))
             except Exception as e:
                 print(f"Mouse over failed: {e}")
             # Scrolling
             driver.execute_script("window.scrollTo(0,5)")
-            time.sleep(0.5)
+            time.sleep(random.uniform(0.03, 0.09))
             driver.execute_script("window.scrollTo(0,272)")
-            time.sleep(0.5)
+            time.sleep(random.uniform(0.03, 0.09))
             driver.execute_script("window.scrollTo(0,672)")
-            time.sleep(0.5)
+            time.sleep(random.uniform(0.03, 0.09))
             page_source = driver.page_source
             soup = BeautifulSoup(page_source, 'html.parser')
             url = retry_url  # Update URL for source_url
@@ -123,21 +124,21 @@ def scrape_lg_manual(model):
             print("Performing recorded actions for lg- page...")
             # Scroll a bit
             driver.execute_script("window.scrollTo(0,2)")
-            time.sleep(2)
+            time.sleep(random.uniform(0.03, 0.09))
             # Click the manuals tab
             try:
-                tab = WebDriverWait(driver, 10).until(
+                tab = WebDriverWait(driver, 5).until(
                     EC.element_to_be_clickable((By.CSS_SELECTOR, "#simple-tab-1 > .MuiTypography-root"))
                 )
                 tab.click()
                 print("Clicked manuals tab.")
-                time.sleep(2)
+                time.sleep(random.uniform(0.03, 0.09))
             except Exception as e:
                 print(f"Error clicking tab: {e}")
                 return None
             # Get the PDF URL from the button
             try:
-                button = WebDriverWait(driver, 10).until(
+                button = WebDriverWait(driver, 5).until(
                     EC.element_to_be_clickable((By.CSS_SELECTOR, ".MuiPaper-root:nth-child(1) .MuiGrid-root:nth-child(2) > .MuiTypography-root:nth-child(1)"))
                 )
                 print(f"Button tag: {button.tag_name}")
@@ -157,7 +158,7 @@ def scrape_lg_manual(model):
                     button.click()
                     print("Clicked PDF download button.")
                     # Wait for download
-                    time.sleep(3)  # wait for download to complete
+                    time.sleep(random.uniform(1.13, 3.02))  # wait for download to complete
                     downloads = [f for f in os.listdir(download_dir) if f.endswith('.pdf')]
                     if downloads:
                         pdf_url = os.path.join(download_dir, downloads[0])
