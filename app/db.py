@@ -33,7 +33,7 @@ def init_db() -> None:
 
     cur.execute(
         """
-        CREATE TABLE documents (
+        CREATE TABLE IF NOT EXISTS documents (
             id INTEGER PRIMARY KEY,
             brand TEXT,
             model_number TEXT,
