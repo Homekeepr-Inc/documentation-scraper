@@ -46,9 +46,9 @@ def scrape_lg_manual(model):
     """
     url = f"https://www.lg.com/us/support/product/{model}"
 
-    # Launch undetected Chrome (non-headless for debugging)
+    # Launch undetected Chrome 
     options = uc.ChromeOptions()
-    # options.add_argument('--headless')  # Disabled for debugging
+    options.add_argument('--headless')  # Disabled for debugging
     options.add_argument('--no-sandbox')
     options.add_argument('--disable-dev-shm-usage')
     options.add_argument('--disable-gpu')
