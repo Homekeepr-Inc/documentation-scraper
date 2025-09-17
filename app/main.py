@@ -13,6 +13,7 @@ from .db import init_db, fetch_document, search_documents
 sys.path.append(os.path.join(os.path.dirname(__file__), '..', 'headless-browser-scraper'))
 from ge_headless_scraper import scrape_ge_manual, ingest_ge_manual
 from lg_scraper import scrape_lg_manual, ingest_lg_manual
+from kitchenaid_headless_scraper import scrape_kitchenaid_manual, ingest_kitchenaid_manual
 
 templates = Jinja2Templates(directory="app/templates")
 
@@ -162,6 +163,44 @@ def scrape_lg(model: str):
         raise HTTPException(status_code=404, detail="No manual found")
 
     ingest_result = ingest_lg_manual(result)
+    if not ingest_result or not ingest_result.id:
+        # Check if already exists
+        doc = get_db().execute("SELECT id FROM documents WHERE file_url = ?", (result['file_url'],)).fetchone()
+        if doc:
+            doc_id = doc[0]
+        else:
+            raise HTTPException(status_code=500, detail="Failed to ingest")
+    else:
+        doc_id = ingest_result.id
+
+    # Serve the file
+    doc = fetch_document(doc_id)
+    if not doc:
+        raise HTTPException(status_code=404, detail="Document not found")
+    path = doc.get("local_path")
+    if not path:
+        raise HTTPException(status_code=404, detail="File not stored locally")
+    return FileResponse(path, media_type="application/pdf")
+
+
+@app.get("/scrape/kitchenaid/{model}")
+def scrape_kitchenaid(model: str):
+    # Check DB for existing document
+    from .db import get_db
+    doc = get_db().execute("SELECT id, local_path FROM documents WHERE brand = ? AND model_number = ? AND local_path IS NOT NULL LIMIT 1", ('kitchenaid', model)).fetchone()
+    if doc:
+        return FileResponse(doc[1], media_type="application/pdf")
+
+    # Not cached, proceed to scrape
+    result = scrape_kitchenaid_manual(model)
+    if not result:
+        raise HTTPException(status_code=404, detail="No manual found")
+
+    # Handle case where result is a list (take first result)
+    if isinstance(result, list):
+        result = result[0]
+
+    ingest_result = ingest_kitchenaid_manual(result)
     if not ingest_result or not ingest_result.id:
         # Check if already exists
         doc = get_db().execute("SELECT id FROM documents WHERE file_url = ?", (result['file_url'],)).fetchone()
