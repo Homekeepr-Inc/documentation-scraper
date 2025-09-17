@@ -24,6 +24,7 @@ from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.common.action_chains import ActionChains
+from selenium.webdriver.common.keys import Keys
 from bs4 import BeautifulSoup, Tag
 import requests
 
@@ -45,10 +46,11 @@ def scrape_lg_manual(model):
         dict: Scraped data or None if not found
     """
     url = f"https://www.lg.com/us/support/product/{model}"
+    pdf_url = None
 
-    # Launch undetected Chrome 
+    # Launch undetected Chrome
     options = uc.ChromeOptions()
-    options.add_argument('--headless')  # Disabled for debugging
+    # options.add_argument('--headless')
     options.add_argument('--no-sandbox')
     options.add_argument('--disable-dev-shm-usage')
     options.add_argument('--disable-gpu')
@@ -110,14 +112,16 @@ def scrape_lg_manual(model):
             time.sleep(random.uniform(0.03, 0.09))
             driver.execute_script("window.scrollTo(0,672)")
             time.sleep(random.uniform(0.03, 0.09))
+            url = retry_url  # Update URL for source_url
             page_source = driver.page_source
             soup = BeautifulSoup(page_source, 'html.parser')
-            url = retry_url  # Update URL for source_url
             print(f"Retry page title: {driver.title}")
             guide_error_retry = soup.find('div', class_='guide-error')
             print(f"Guide error after retry: {guide_error_retry is not None}")
             # Debug: print first 1000 chars of page source
             print(f"Page source (first 1000 chars): {page_source[:1000]}")
+
+
 
         if 'lg-' in url:
             # New parsing for lg- prefixed pages using recorded actions
@@ -135,7 +139,96 @@ def scrape_lg_manual(model):
                 time.sleep(random.uniform(0.03, 0.09))
             except Exception as e:
                 print(f"Error clicking tab: {e}")
-                return None
+                # Fallback to Google search
+                driver.get("https://www.google.com")
+                time.sleep(random.uniform(0.03, 0.09))
+                try:
+                    search_input = driver.find_element(By.ID, "APjFqb")
+                    search_input.send_keys(model)
+                    search_input.send_keys(Keys.RETURN)
+                    time.sleep(random.uniform(0.03, 0.09))
+                    # Find the LG link containing the model
+                    link = driver.find_element(By.CSS_SELECTOR, f"a[href*='lg.com'][href*='{model}']")
+                    if link:
+                        link.click()
+                        time.sleep(random.uniform(0.03, 0.09))
+                        # Perform recorded actions
+                        # Mouse over third tab
+                        element = driver.find_element(By.CSS_SELECTOR, ".c-tabs__item:nth-child(3) > .c-tabs__item-text")
+                        actions = ActionChains(driver)
+                        actions.move_to_element(element).perform()
+                        time.sleep(random.uniform(0.03, 0.09))
+                        # Click third tab
+                        driver.find_element(By.CSS_SELECTOR, ".c-tabs__item:nth-child(3) > .c-tabs__item-text").click()
+                        time.sleep(random.uniform(0.03, 0.09))
+                        # Scroll to 6268
+                        driver.execute_script("window.scrollTo(0,6268.10009765625)")
+                        time.sleep(random.uniform(0.03, 0.09))
+                        # Click title
+                        driver.find_element(By.CSS_SELECTOR, "#title-0f0864774a > .cmp-title__text").click()
+                        time.sleep(random.uniform(0.03, 0.09))
+                        # Scroll to 6054
+                        driver.execute_script("window.scrollTo(0,6054.10009765625)")
+                        time.sleep(random.uniform(0.03, 0.09))
+                        # Mouse over
+                        element = driver.find_element(By.CSS_SELECTOR, ".c-wrapper:nth-child(1) .cmp-container:nth-child(1) .c-list__item:nth-child(1) .c-text-contents:nth-child(1)")
+                        actions.move_to_element(element).perform()
+                        time.sleep(random.uniform(0.03, 0.09))
+                        # Click download
+                        download_element = driver.find_element(By.CSS_SELECTOR, ".c-resources-wrap:nth-child(1) .c-resources__item--download-info-name")
+                        pdf_url = download_element.get_attribute('href')
+                        if pdf_url:
+                            print(f"Got PDF URL from Google search: {pdf_url}")
+                        else:
+                            download_element.click()
+                            time.sleep(random.uniform(1.13, 3.02))
+                            downloads = [f for f in os.listdir(download_dir) if f.endswith('.pdf')]
+                            if downloads:
+                                pdf_url = os.path.join(download_dir, downloads[0])
+                                print(f"Downloaded PDF: {pdf_url}")
+                            else:
+                                print("No PDF found after Google search")
+                                return None
+                        # Validate PDF
+                        if pdf_url and (pdf_url.endswith('.pdf') or 'pdf' in pdf_url.lower()):
+                            title = "Owner's Manual"
+                            doc_type = 'owner'
+                            print(f"Found PDF: {title}")
+                            print(f"URL: {pdf_url}")
+                            # Download and validate PDF
+                            try:
+                                if pdf_url.startswith('/'):
+                                    # Local file
+                                    with open(pdf_url, 'rb') as f:
+                                        content = f.read()
+                                else:
+                                    response = requests.get(pdf_url, allow_redirects=True)
+                                    response.raise_for_status()
+                                    content = response.content
+                                if not content.startswith(b'%PDF-'):
+                                    print(f"File is not a PDF. First bytes: {content[:10]}")
+                                    return None
+                                print("Validated as PDF.")
+                            except Exception as e:
+                                print(f"Error validating PDF: {e}")
+                                return None
+                            return {
+                                'brand': 'lg',
+                                'model_number': model,
+                                'doc_type': doc_type,
+                                'title': title,
+                                'source_url': driver.current_url,
+                                'file_url': pdf_url,
+                            }
+                        else:
+                            print("No valid PDF URL found after Google search.")
+                            return None
+                    else:
+                        print("No LG link found on Google")
+                        return None
+                except Exception as e:
+                    print(f"Error performing Google search: {e}")
+                    return None
             # Get the PDF URL from the button
             try:
                 button = WebDriverWait(driver, 5).until(
