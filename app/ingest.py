@@ -7,8 +7,9 @@ from typing import Optional, Tuple
 
 import requests
 from langdetect import detect, DetectorFactory
-from pdfminer.high_level import extract_text as pdfminer_extract_text
-from pypdf import PdfReader
+
+# Switched from pdfminer due to >20 second performance difference https://github.com/microsoft/markitdown/issues/1276
+from pypdf import PdfReader 
 
 from . import db
 from .storage import paths_for
@@ -33,11 +34,16 @@ def _sha256_bytes(data: bytes) -> str:
 
 
 def _extract_text_and_pages(pdf_bytes: bytes) -> Tuple[str, int]:
-    text = pdfminer_extract_text(io.BytesIO(pdf_bytes)) or ""
     try:
         reader = PdfReader(io.BytesIO(pdf_bytes))
         pages = len(reader.pages)
+        text = ""
+        for page in reader.pages:
+            text += page.extract_text() or ""
+            if len(text) > 10000:  # Limit text extraction to first ~10k chars for speed
+                break
     except Exception:
+        text = ""
         pages = 0
     return text, pages
 
