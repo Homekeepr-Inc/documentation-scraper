@@ -29,6 +29,76 @@ import requests
 from app.config import DEFAULT_BLOB_ROOT
 
 
+def scrape_from_page(driver, model, download_dir):
+    """
+    Scrape PDF from the current page.
+    """
+    page_source = driver.page_source
+    soup = BeautifulSoup(page_source, 'html.parser')
+    pdf_links = soup.find_all('a', href=re.compile(r'\.pdf$'))
+    if not pdf_links:
+        print("No PDF link found on page.")
+        return None
+
+    pdf_url = urljoin(driver.current_url, pdf_links[0]['href'])
+    print(f"Found PDF URL: {pdf_url}")
+
+    # Navigate to the PDF
+    driver.get(pdf_url)
+    # Wait for download to complete
+    WebDriverWait(driver, 30).until(
+        lambda d: any(f.endswith('.pdf') for f in os.listdir(download_dir))
+    )
+
+    downloads = [f for f in os.listdir(download_dir) if f.endswith('.pdf')]
+    if downloads:
+        old_path = os.path.join(download_dir, downloads[0])
+        # Poll until file size stabilizes to ensure download complete
+        initial_size = -1
+        stable_count = 0
+        for _ in range(30):  # max 30 seconds
+            if os.path.exists(old_path):
+                size = os.path.getsize(old_path)
+                if size == initial_size:
+                    stable_count += 1
+                    if stable_count >= 3:  # stable for 3 seconds
+                        break
+                else:
+                    stable_count = 0
+                initial_size = size
+            time.sleep(1)
+        else:
+            print("Download did not stabilize within 30 seconds")
+            return None
+        new_name = f"{model}.pdf"
+        new_path = os.path.join(download_dir, new_name)
+        os.rename(old_path, new_path)
+        pdf_path = new_path
+        print(f"Downloaded PDF: {pdf_path}")
+
+        title = "Owner's Manual"
+        # Try to extract better title from URL
+        if 'owners-manual' in pdf_url.lower():
+            title = "Owner's Manual"
+        elif 'install' in pdf_url.lower():
+            title = "Installation Manual"
+        elif 'service' in pdf_url.lower():
+            title = "Service Manual"
+
+        results = [{
+            'brand': 'kitchenaid',
+            'model_number': model,
+            'doc_type': 'owner',  # Default to owner, could be refined
+            'title': title,
+            'source_url': driver.current_url,
+            'file_url': pdf_path,
+        }]
+        return results
+    else:
+        print("PDF download failed.")
+        return None
+
+
 def scrape_kitchenaid_manual(model):
     """
     Scrape the owner's manual PDF for a given Kitchenaid appliance model.
@@ -43,7 +113,7 @@ def scrape_kitchenaid_manual(model):
 
     # Launch undetected Chrome
     options = uc.ChromeOptions()
-    # options.add_argument('--headless')
+    options.add_argument('--headless')
     options.add_argument('--disable-dev-shm-usage')
     options.add_argument('--disable-gpu')
     options.add_argument('--window-size=1920,1080')
@@ -65,11 +135,6 @@ def scrape_kitchenaid_manual(model):
         print(f"Fetching owners page for model {model}...")
         driver.get(url)
         print(f"Current URL: {driver.current_url}")
-
-        # Wait for the page to load
-        WebDriverWait(driver, 10).until(
-            EC.presence_of_element_located((By.TAG_NAME, "body"))
-        )
 
         # Open the conversion drawer
         try:
@@ -113,132 +178,47 @@ def scrape_kitchenaid_manual(model):
             )
         except Exception as e:
             print(f"Could not find model link: {e}")
-            return None
-
-        # Find the PDF link on the model page
-        page_source = driver.page_source
-        soup = BeautifulSoup(page_source, 'html.parser')
-        pdf_links = soup.find_all('a', href=re.compile(r'\.pdf$'))
-        if not pdf_links:
-            print("No PDF link found on model page.")
-            return None
-
-        pdf_url = urljoin(driver.current_url, pdf_links[0]['href'])
-        print(f"Found PDF URL: {pdf_url}")
-
-        # Navigate to the PDF
-        driver.get(pdf_url)
-        # Wait for download to complete
-        WebDriverWait(driver, 30).until(
-            lambda d: any(f.endswith('.pdf') for f in os.listdir(download_dir))
-        )
-
-        downloads = [f for f in os.listdir(download_dir) if f.endswith('.pdf')]
-        if downloads:
-            old_path = os.path.join(download_dir, downloads[0])
-            # Poll until file size stabilizes to ensure download complete
-            initial_size = -1
-            stable_count = 0
-            for _ in range(30):  # max 30 seconds
-                if os.path.exists(old_path):
-                    size = os.path.getsize(old_path)
-                    if size == initial_size:
-                        stable_count += 1
-                        if stable_count >= 3:  # stable for 3 seconds
-                            break
-                    else:
-                        stable_count = 0
-                    initial_size = size
-                time.sleep(1)
-            else:
-                print("Download did not stabilize within 30 seconds")
-                return None
-            new_name = f"{model}.pdf"
-            new_path = os.path.join(download_dir, new_name)
-            os.rename(old_path, new_path)
-            pdf_path = new_path
-            print(f"Downloaded PDF: {pdf_path}")
-
-            title = "Owner's Manual"
-            # Try to extract better title from URL
-            if 'owners-manual' in pdf_url.lower():
-                title = "Owner's Manual"
-            elif 'install' in pdf_url.lower():
-                title = "Installation Manual"
-            elif 'service' in pdf_url.lower():
-                title = "Service Manual"
-
-            results = [{
-                'brand': 'kitchenaid',
-                'model_number': model,
-                'doc_type': 'owner',  # Default to owner, could be refined
-                'title': title,
-                'source_url': 'https://www.kitchenaid.com/owners.html',
-                'file_url': pdf_path,
-            }]
-            return results
-        else:
-            print("PDF download failed.")
-            return None
-
-        # Otherwise, wait for the HTML page to load and parse for PDF links
-        try:
+            # Try fallback
+            print("Trying fallback URL...")
+            fallback_url = f"https://www.kitchenaid.com/owners-center-pdp.{model}.html"
+            driver.get(fallback_url)
             WebDriverWait(driver, 10).until(
                 EC.presence_of_element_located((By.TAG_NAME, "body"))
             )
-        except:
-            print("Page did not load as expected (possibly not HTML).")
-            return None
+            result = scrape_from_page(driver, model, download_dir)
+            return result
 
-        page_source = driver.page_source
-        soup = BeautifulSoup(page_source, 'html.parser')
+        # Try scraping from the model page
+        result = scrape_from_page(driver, model, download_dir)
+        if result:
+            return result
 
-        # Find all PDF links
-        pdf_links = soup.find_all('a', href=re.compile(r'\.pdf$'))
-
-        if not pdf_links:
-            print("No PDF links found on the page.")
-            return None
-
-        results = []
-        for pdf_link in pdf_links:
-            if isinstance(pdf_link, Tag):
-                href = pdf_link.get('href')
-                if href:
-                    pdf_url = urljoin(driver.current_url, str(href))
-                else:
-                    continue
-            else:
-                continue
-
-            title = pdf_link.get_text(strip=True) or "Owner's Manual"
-
-            # Determine doc_type from title
-            doc_type = 'owner'
-            if 'install' in title.lower():
-                doc_type = 'installation'
-            elif 'use and care' in title.lower():
-                doc_type = 'owner'
-            elif 'service' in title.lower():
-                doc_type = 'service'
-
-            print(f"Found PDF: {title}")
-            print(f"URL: {pdf_url}")
-
-            results.append({
-                'brand': 'kitchenaid',
-                'model_number': model,
-                'doc_type': doc_type,
-                'title': title,
-                'source_url': driver.current_url,
-                'file_url': pdf_url,
-            })
-
-        return results
+        # Fallback: try direct URL
+        print("Initial scrape failed, trying fallback URL...")
+        fallback_url = f"https://www.kitchenaid.com/owners-center-pdp.{model}.html"
+        driver.get(fallback_url)
+        WebDriverWait(driver, 10).until(
+            EC.presence_of_element_located((By.TAG_NAME, "body"))
+        )
+        result = scrape_from_page(driver, model, download_dir)
+        return result
 
     except Exception as e:
         print(f"Error scraping {model}: {e}")
         traceback.print_exc()
+        # Try fallback on any exception
+        try:
+            print("Trying fallback URL due to error...")
+            fallback_url = f"https://www.kitchenaid.com/owners-center-pdp.{model}.html"
+            driver.get(fallback_url)
+            WebDriverWait(driver, 10).until(
+                EC.presence_of_element_located((By.TAG_NAME, "body"))
+            )
+            result = scrape_from_page(driver, model, download_dir)
+            if result:
+                return result
+        except Exception as e2:
+            print(f"Fallback also failed: {e2}")
         return None
 
     finally:
