@@ -79,11 +79,6 @@ def ingest_from_url(brand: str, model_number: str, doc_type: str, title: str, so
     size_bytes = len(pdf_bytes)
     sha = _sha256_bytes(pdf_bytes)
     
-    # Speed optimization: Check if we already have this file by SHA256
-    existing_by_hash = db.get_db().execute("SELECT id, pages, english_present FROM documents WHERE file_sha256 = ?", (sha,)).fetchone()
-    if existing_by_hash:
-        logger.info(f"Skipping duplicate file (SHA256): {sha[:8]}...")
-        return IngestResult(id=existing_by_hash[0], sha256=sha, pages=existing_by_hash[1], size_bytes=size_bytes, english_present=bool(existing_by_hash[2]))
 
     text, pages = _extract_text_and_pages(pdf_bytes)
     english = _english_present(text)

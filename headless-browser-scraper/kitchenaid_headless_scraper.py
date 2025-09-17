@@ -133,7 +133,11 @@ def scrape_kitchenaid_manual(model):
 
         downloads = [f for f in os.listdir(download_dir) if f.endswith('.pdf')]
         if downloads:
-            pdf_path = os.path.join(download_dir, downloads[0])
+            old_path = os.path.join(download_dir, downloads[0])
+            new_name = f"{model}.pdf"
+            new_path = os.path.join(download_dir, new_name)
+            os.rename(old_path, new_path)
+            pdf_path = new_path
             print(f"Downloaded PDF: {pdf_path}")
 
             title = "Owner's Manual"

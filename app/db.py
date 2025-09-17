@@ -27,6 +27,9 @@ def init_db() -> None:
     conn = get_db()
     cur = conn.cursor()
 
+    # file_sha256 is no longer UNIQUE as we can have multiple models that share the same
+    # PDF. If we left it as UNIQUE, we would not be able to cache previously fetched PDFs
+    # if they end up being assigned to multiple models.
     cur.execute(
         """
         CREATE TABLE IF NOT EXISTS documents (
@@ -41,7 +44,7 @@ def init_db() -> None:
             published_at TEXT,
             source_url TEXT,
             file_url TEXT,
-            file_sha256 TEXT UNIQUE,
+            file_sha256 TEXT,
             size_bytes INTEGER,
             pages INTEGER,
             ocr_applied INTEGER DEFAULT 0,

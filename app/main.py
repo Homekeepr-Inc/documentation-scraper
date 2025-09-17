@@ -187,8 +187,10 @@ def scrape_lg(model: str):
 def scrape_kitchenaid(model: str):
     # Check DB for existing document
     from .db import get_db
-    doc = get_db().execute("SELECT id, local_path FROM documents WHERE brand = ? AND model_number = ? AND local_path IS NOT NULL LIMIT 1", ('kitchenaid', model)).fetchone()
-    if doc:
+    doc = get_db().execute("SELECT id, local_path FROM documents WHERE brand = ? AND model_number = ? LIMIT 1", ('kitchenaid', model)).fetchone()
+    print(f"Checking for existing doc for {model}: {doc}")
+    if doc and doc[1]:
+        print(f"Returning existing file for {model}")
         return FileResponse(doc[1], media_type="application/pdf")
 
     # Not cached, proceed to scrape
@@ -201,9 +203,11 @@ def scrape_kitchenaid(model: str):
         result = result[0]
 
     ingest_result = ingest_kitchenaid_manual(result)
+    print(f"Ingest result for {model}: {ingest_result}")
     if not ingest_result or not ingest_result.id:
         # Check if already exists
         doc = get_db().execute("SELECT id FROM documents WHERE file_url = ?", (result['file_url'],)).fetchone()
+        print(f"Checking file_url for {model}: {doc}")
         if doc:
             doc_id = doc[0]
         else:
