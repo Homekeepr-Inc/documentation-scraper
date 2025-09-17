@@ -44,20 +44,20 @@ def duckduckgo_fallback(driver, model, host_url, scrape_callback):
     print(f"Attempting DuckDuckGo fallback for {model} on {host_url}...")
 
     try:
-        # Navigate to DuckDuckGo search
+        # Navigate to DuckDuckGo search.
         search_query = f"{model} owner's manual"
         driver.get(f"https://duckduckgo.com/?q={search_query}")
         time.sleep(random.uniform(0.5, 1.0))
 
         print(f"DuckDuckGo search loaded for: {search_query}")
 
-        # Wait for search results to appear
+        # Wait for search results to appear.
         WebDriverWait(driver, 10).until(
             EC.presence_of_element_located((By.CSS_SELECTOR, "a[data-testid='result-title-a']"))
         )
 
-        # Find the first result link that contains the trusted host
-        # DuckDuckGo uses different selectors, let's try the most common ones
+        # Find the first result link that contains the trusted host.
+        # DuckDuckGo uses different selectors, so we try the most common ones.
         result_links = driver.find_elements(By.CSS_SELECTOR, "a[data-testid='result-title-a'], .result__a, .result__url")
 
         trusted_link = None
@@ -72,13 +72,13 @@ def duckduckgo_fallback(driver, model, host_url, scrape_callback):
             print(f"No trusted link found for {host_url}")
             return None
 
-        # Click the trusted link
+        # Click the trusted link.
         trusted_link.click()
         time.sleep(random.uniform(0.5, 1.0))
 
         print(f"Navigated to: {driver.current_url}")
 
-        # Call the brand-specific scraping callback
+        # Call the brand-specific scraping callback.
         return scrape_callback(driver)
 
     except Exception as e:
@@ -122,7 +122,7 @@ def wait_for_download(download_dir, timeout=30):
     while time.time() - start_time < timeout:
         pdf_files = [f for f in os.listdir(download_dir) if f.endswith('.pdf')]
         if pdf_files:
-            # Return the most recently modified PDF
+            # Return the most recently modified PDF.
             pdf_files.sort(key=lambda x: os.path.getmtime(os.path.join(download_dir, x)), reverse=True)
             return os.path.join(download_dir, pdf_files[0])
         time.sleep(0.5)
