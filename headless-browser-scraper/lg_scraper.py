@@ -139,16 +139,14 @@ def scrape_lg_manual(model):
                 time.sleep(random.uniform(0.03, 0.09))
             except Exception as e:
                 print(f"Error clicking tab: {e}")
-                # Fallback to Google search
-                driver.get("https://www.google.com")
-                time.sleep(random.uniform(0.03, 0.09))
+                # Fallback to DuckDuckGo search
+                driver.get(f"https://duckduckgo.com/?q={model}")
+                time.sleep(random.uniform(0.5, 1.0))
                 try:
-                    search_input = driver.find_element(By.ID, "APjFqb")
-                    search_input.send_keys(model)
-                    search_input.send_keys(Keys.RETURN)
-                    time.sleep(random.uniform(0.03, 0.09))
-                    # Find the LG link containing the model
-                    link = driver.find_element(By.CSS_SELECTOR, f"a[href*='lg.com'][href*='{model}']")
+                    # Find the LG link containing lg.com/us and the model
+                    link = WebDriverWait(driver, 10).until(
+                        EC.presence_of_element_located((By.CSS_SELECTOR, f"a[href*='lg.com/us'][href*='{model}']"))
+                    )
                     if link:
                         link.click()
                         time.sleep(random.uniform(0.03, 0.09))
