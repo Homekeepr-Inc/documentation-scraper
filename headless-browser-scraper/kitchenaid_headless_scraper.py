@@ -12,11 +12,9 @@ Example: python3 kitchenaid_headless_scraper.py KOES530PSS
 
 import re
 import sys
-import time
 import os
 import tempfile
 import traceback
-import random
 from urllib.parse import urljoin
 
 import undetected_chromedriver as uc
@@ -68,26 +66,30 @@ def scrape_kitchenaid_manual(model):
         print(f"Current URL: {driver.current_url}")
 
         # Wait for the page to load
-        WebDriverWait(driver, 1).until(
+        WebDriverWait(driver, 10).until(
             EC.presence_of_element_located((By.TAG_NAME, "body"))
         )
-        # time.sleep(1)
 
         # Open the conversion drawer
         try:
-            drawer_tab = driver.find_element(By.CSS_SELECTOR, ".conversion-drawer-tab__open-close")
+            drawer_tab = WebDriverWait(driver, 10).until(
+                EC.element_to_be_clickable((By.CSS_SELECTOR, ".conversion-drawer-tab__open-close"))
+            )
             drawer_tab.click()
             print("Opened drawer")
-            time.sleep(1)
+            # Wait for input field to be clickable after drawer opens
+            WebDriverWait(driver, 10).until(
+                EC.element_to_be_clickable((By.CSS_SELECTOR, ".dpc-input"))
+            )
         except Exception as e:
-            print(f"Could not open drawer: {e}")
+            print(f"Could not open drawer or find input field: {e}")
+            return None
 
         # Click on the input field
         try:
             input_field = driver.find_element(By.CSS_SELECTOR, ".dpc-input")
             input_field.click()
             print("Clicked input field")
-            time.sleep(0.2)
         except Exception as e:
             print(f"Could not find input field: {e}")
             return None
@@ -95,7 +97,6 @@ def scrape_kitchenaid_manual(model):
         # Type the model number
         input_field.send_keys(model)
         print(f"Sent keys: {model}")
-        time.sleep(1)
 
         # Wait for the model link to appear and click it
         try:
@@ -105,16 +106,13 @@ def scrape_kitchenaid_manual(model):
             print("Found model link, clicking")
             model_link.click()
             print("Clicked model link")
-            time.sleep(2)
+            # Wait for the model page to load
+            WebDriverWait(driver, 10).until(
+                EC.presence_of_element_located((By.TAG_NAME, "body"))
+            )
         except Exception as e:
             print(f"Could not find model link: {e}")
             return None
-
-        # Wait for the model page to load
-        WebDriverWait(driver, 10).until(
-            EC.presence_of_element_located((By.TAG_NAME, "body"))
-        )
-        time.sleep(1)
 
         # Find the PDF link on the model page
         page_source = driver.page_source
@@ -129,7 +127,10 @@ def scrape_kitchenaid_manual(model):
 
         # Navigate to the PDF
         driver.get(pdf_url)
-        time.sleep(random.uniform(1.13, 3.02))  # Wait for download to complete
+        # Wait for download to complete
+        WebDriverWait(driver, 30).until(
+            lambda d: any(f.endswith('.pdf') for f in os.listdir(download_dir))
+        )
 
         downloads = [f for f in os.listdir(download_dir) if f.endswith('.pdf')]
         if downloads:
@@ -167,7 +168,6 @@ def scrape_kitchenaid_manual(model):
             WebDriverWait(driver, 10).until(
                 EC.presence_of_element_located((By.TAG_NAME, "body"))
             )
-            time.sleep(2)
         except:
             print("Page did not load as expected (possibly not HTML).")
             return None
