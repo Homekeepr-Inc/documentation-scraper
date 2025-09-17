@@ -60,15 +60,7 @@ def init_db() -> None:
         """
     )
 
-    # Migration: Remove any unique constraints on file_sha256
-    cur.execute("PRAGMA index_list(documents);")
-    indexes = cur.fetchall()
-    for idx in indexes:
-        idx_name = idx[1]
-        is_unique = idx[2]
-        if is_unique and 'sha256' in idx_name.lower():
-            cur.execute(f"DROP INDEX {idx_name};")
-            logger.info(f"Dropped unique index {idx_name} on file_sha256")
+
 
     # Basic indexes
     cur.execute("CREATE INDEX IF NOT EXISTS idx_documents_brand ON documents(brand);")
