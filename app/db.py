@@ -55,7 +55,10 @@ def init_db() -> None:
             text_path TEXT,
             text TEXT,
             ingested_at TEXT,
-            last_seen_at TEXT
+            last_seen_at TEXT,
+            -- Ensures that for a given brand and model, we only have one of each document type.
+            -- This is the primary guard against duplicate entries.
+            UNIQUE(brand, model_number, doc_type)
         );
         """
     )
