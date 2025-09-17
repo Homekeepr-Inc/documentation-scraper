@@ -14,6 +14,7 @@ import re
 import sys
 import os
 import tempfile
+import time
 import traceback
 from urllib.parse import urljoin
 
@@ -40,7 +41,7 @@ def scrape_kitchenaid_manual(model):
     """
     url = "https://www.kitchenaid.com/owners.html"
 
-    # Launch undetected Chrome in headless mode
+    # Launch undetected Chrome
     options = uc.ChromeOptions()
     # options.add_argument('--headless')
     options.add_argument('--disable-dev-shm-usage')
@@ -135,6 +136,23 @@ def scrape_kitchenaid_manual(model):
         downloads = [f for f in os.listdir(download_dir) if f.endswith('.pdf')]
         if downloads:
             old_path = os.path.join(download_dir, downloads[0])
+            # Poll until file size stabilizes to ensure download complete
+            initial_size = -1
+            stable_count = 0
+            for _ in range(30):  # max 30 seconds
+                if os.path.exists(old_path):
+                    size = os.path.getsize(old_path)
+                    if size == initial_size:
+                        stable_count += 1
+                        if stable_count >= 3:  # stable for 3 seconds
+                            break
+                    else:
+                        stable_count = 0
+                    initial_size = size
+                time.sleep(1)
+            else:
+                print("Download did not stabilize within 30 seconds")
+                return None
             new_name = f"{model}.pdf"
             new_path = os.path.join(download_dir, new_name)
             os.rename(old_path, new_path)
