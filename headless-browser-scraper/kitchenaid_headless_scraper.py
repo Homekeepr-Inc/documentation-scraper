@@ -15,6 +15,8 @@ import sys
 import time
 import os
 import tempfile
+import traceback
+import random
 from urllib.parse import urljoin
 
 import undetected_chromedriver as uc
@@ -23,6 +25,9 @@ from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 from bs4 import BeautifulSoup, Tag
 import requests
+
+# Import config for BLOB_ROOT
+from app.config import DEFAULT_BLOB_ROOT
 
 
 def scrape_kitchenaid_manual(model):
@@ -39,12 +44,21 @@ def scrape_kitchenaid_manual(model):
 
     # Launch undetected Chrome in headless mode
     options = uc.ChromeOptions()
-    options.add_argument('--headless')
-    # options.add_argument('--no-sandbox')
+    # options.add_argument('--headless')
     options.add_argument('--disable-dev-shm-usage')
     options.add_argument('--disable-gpu')
     options.add_argument('--window-size=1920,1080')
     options.add_argument('--user-agent=Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36')
+
+    # Set download preferences
+    download_dir = os.path.abspath(DEFAULT_BLOB_ROOT)
+    os.makedirs(download_dir, exist_ok=True)
+    options.add_experimental_option("prefs", {
+        "download.default_directory": download_dir,
+        "download.prompt_for_download": False,
+        "download.directory_upgrade": True,
+        "plugins.always_open_pdf_externally": True
+    })
 
     driver = uc.Chrome(options=options)
 
@@ -63,6 +77,7 @@ def scrape_kitchenaid_manual(model):
         try:
             drawer_tab = driver.find_element(By.CSS_SELECTOR, ".conversion-drawer-tab__open-close")
             drawer_tab.click()
+            print("Opened drawer")
             time.sleep(1)
         except Exception as e:
             print(f"Could not open drawer: {e}")
@@ -71,6 +86,7 @@ def scrape_kitchenaid_manual(model):
         try:
             input_field = driver.find_element(By.CSS_SELECTOR, ".dpc-input")
             input_field.click()
+            print("Clicked input field")
             time.sleep(0.2)
         except Exception as e:
             print(f"Could not find input field: {e}")
@@ -78,6 +94,7 @@ def scrape_kitchenaid_manual(model):
 
         # Type the model number
         input_field.send_keys(model)
+        print(f"Sent keys: {model}")
         time.sleep(1)
 
         # Wait for the model link to appear and click it
@@ -85,57 +102,47 @@ def scrape_kitchenaid_manual(model):
             model_link = WebDriverWait(driver, 10).until(
                 EC.element_to_be_clickable((By.LINK_TEXT, model))
             )
+            print("Found model link, clicking")
             model_link.click()
+            print("Clicked model link")
             time.sleep(2)
         except Exception as e:
             print(f"Could not find model link: {e}")
             return None
 
-        # Store current window handles
-        window_handles_before = driver.window_handles
+        # Wait for the model page to load
+        WebDriverWait(driver, 10).until(
+            EC.presence_of_element_located((By.TAG_NAME, "body"))
+        )
+        time.sleep(1)
 
-        # Click on the element that opens the manual page (dynamic ID, may need adjustment)
-        try:
-            # Try to find the element by ID, if not, perhaps by other means
-            manual_element = driver.find_element(By.ID, "textline-315cebecbd")
-            manual_element.click()
-            time.sleep(2)
-        except Exception as e:
-            print(f"Could not find manual element by ID: {e}")
-            # Fallback: try to find a link with "manual" or similar
-            try:
-                manual_links = driver.find_elements(By.PARTIAL_LINK_TEXT, "Manual")
-                if manual_links:
-                    manual_links[0].click()
-                    time.sleep(2)
-                else:
-                    print("No manual link found.")
-                    return None
-            except Exception as e2:
-                print(f"Fallback failed: {e2}")
-                return None
-
-        # Wait for new window
-        WebDriverWait(driver, 10).until(lambda d: len(d.window_handles) > len(window_handles_before))
-        new_window = set(driver.window_handles) - set(window_handles_before)
-        if new_window:
-            driver.switch_to.window(new_window.pop())
-            current_url = driver.current_url
-            print(f"Switched to new window: {current_url}")
-        else:
-            print("No new window opened.")
+        # Find the PDF link on the model page
+        page_source = driver.page_source
+        soup = BeautifulSoup(page_source, 'html.parser')
+        pdf_links = soup.find_all('a', href=re.compile(r'\.pdf$'))
+        if not pdf_links:
+            print("No PDF link found on model page.")
             return None
 
-        # Check if the page is a direct PDF
-        if current_url.lower().endswith('.pdf'):
-            print("Direct PDF link found.")
+        pdf_url = urljoin(driver.current_url, pdf_links[0]['href'])
+        print(f"Found PDF URL: {pdf_url}")
+
+        # Navigate to the PDF
+        driver.get(pdf_url)
+        time.sleep(random.uniform(1.13, 3.02))  # Wait for download to complete
+
+        downloads = [f for f in os.listdir(download_dir) if f.endswith('.pdf')]
+        if downloads:
+            pdf_path = os.path.join(download_dir, downloads[0])
+            print(f"Downloaded PDF: {pdf_path}")
+
             title = "Owner's Manual"
             # Try to extract better title from URL
-            if 'owners-manual' in current_url.lower():
+            if 'owners-manual' in pdf_url.lower():
                 title = "Owner's Manual"
-            elif 'install' in current_url.lower():
+            elif 'install' in pdf_url.lower():
                 title = "Installation Manual"
-            elif 'service' in current_url.lower():
+            elif 'service' in pdf_url.lower():
                 title = "Service Manual"
 
             results = [{
@@ -143,10 +150,13 @@ def scrape_kitchenaid_manual(model):
                 'model_number': model,
                 'doc_type': 'owner',  # Default to owner, could be refined
                 'title': title,
-                'source_url': current_url,
-                'file_url': current_url,
+                'source_url': 'https://www.kitchenaid.com/owners.html',
+                'file_url': pdf_path,
             }]
             return results
+        else:
+            print("PDF download failed.")
+            return None
 
         # Otherwise, wait for the HTML page to load and parse for PDF links
         try:
@@ -206,6 +216,7 @@ def scrape_kitchenaid_manual(model):
 
     except Exception as e:
         print(f"Error scraping {model}: {e}")
+        traceback.print_exc()
         return None
 
     finally:

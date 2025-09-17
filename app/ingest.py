@@ -70,8 +70,9 @@ def ingest_from_url(brand: str, model_number: str, doc_type: str, title: str, so
             'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
             'Accept': 'application/pdf,*/*',
             'Accept-Language': 'en-US,en;q=0.9',
+            'Referer': source_url,
         }
-        resp = requests.get(file_url, headers=headers, timeout=15)  # Reduced timeout
+        resp = requests.get(file_url, headers=headers, timeout=20, stream=True)  # Increased timeout and stream
         resp.raise_for_status()
         http_status = resp.status_code
         pdf_bytes = resp.content
