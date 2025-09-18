@@ -19,6 +19,12 @@ import undetected_chromedriver as uc
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
+
+# Import utility functions
+import os
+import sys
+sys.path.append(os.path.dirname(__file__))
+from utils import safe_driver_get
 from bs4 import BeautifulSoup, Tag
 import requests
 from difflib import SequenceMatcher
@@ -52,7 +58,7 @@ def scrape_ge_manual(model):
 
     try:
         print(f"Fetching page for model {model}...")
-        driver.get(url)
+        safe_driver_get(driver, url)
         print(f"Current URL: {driver.current_url}")
 
         # Wait for the page to load
@@ -70,7 +76,7 @@ def scrape_ge_manual(model):
         if error_h1:
             print("Landed on an error page, performing a keyword search...")
             search_url = f"https://www.geapplianceparts.com/store/parts/KeywordSearch?q={model}"
-            driver.get(search_url)
+            safe_driver_get(driver, search_url)
             print(f"Current URL: {driver.current_url}")
 
             # Wait for the search results to load and re-parse the page
@@ -96,7 +102,7 @@ def scrape_ge_manual(model):
 
             if highest_similarity >= 0.75 and best_match_url:
                 print(f"Found a model with {highest_similarity:.2f} similarity. Navigating to: {best_match_url}")
-                driver.get(best_match_url)
+                safe_driver_get(driver, best_match_url)
                 print(f"Current URL: {driver.current_url}")
 
                 # Wait for the final page to load and re-parse

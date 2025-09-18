@@ -23,6 +23,10 @@ from selenium.webdriver.support import expected_conditions as EC
 from bs4 import BeautifulSoup
 import requests
 
+# Import utility functions
+sys.path.append(os.path.dirname(__file__))
+from utils import safe_driver_get
+
 # Add project root to sys.path
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
@@ -37,7 +41,7 @@ def fallback_scrape(driver, model, search_url):
         print(f"Owner's Manual link not found for {model} on search page, trying direct owners-center URL...")
         # Try direct owners-center URL
         direct_url = f"https://www.whirlpool.com/owners-center-pdp.{model}.html"
-        driver.get(direct_url)
+        safe_driver_get(driver, direct_url)
         print(f"Navigated to direct URL: {direct_url}")
 
         # Wait for page to load
@@ -140,7 +144,7 @@ def scrape_whirlpool_manual(model):
     driver = uc.Chrome(options=options)
     try:
         print(f"Navigating to: {search_url}")
-        driver.get(search_url)
+        safe_driver_get(driver, search_url)
         print(f"Current URL: {driver.current_url}")
 
         # Wait for page to load

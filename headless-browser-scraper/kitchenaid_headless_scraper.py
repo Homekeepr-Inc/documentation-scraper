@@ -25,6 +25,10 @@ from selenium.webdriver.support import expected_conditions as EC
 from bs4 import BeautifulSoup, Tag
 import requests
 
+# Import utility functions
+sys.path.append(os.path.dirname(__file__))
+from utils import safe_driver_get
+
 # Import config for BLOB_ROOT
 from app.config import DEFAULT_BLOB_ROOT
 
@@ -44,7 +48,7 @@ def scrape_from_page(driver, model, download_dir):
     print(f"Found PDF URL: {pdf_url}")
 
     # Navigate to the PDF
-    driver.get(pdf_url)
+    safe_driver_get(driver, pdf_url)
     # Wait for download to complete
     WebDriverWait(driver, 30).until(
         lambda d: any(f.endswith('.pdf') for f in os.listdir(download_dir))
@@ -133,7 +137,7 @@ def scrape_kitchenaid_manual(model):
 
     try:
         print(f"Fetching owners page for model {model}...")
-        driver.get(url)
+        safe_driver_get(driver, url)
         print(f"Current URL: {driver.current_url}")
 
         # Open the conversion drawer
@@ -181,7 +185,7 @@ def scrape_kitchenaid_manual(model):
             # Try fallback
             print("Trying fallback URL...")
             fallback_url = f"https://www.kitchenaid.com/owners-center-pdp.{model}.html"
-            driver.get(fallback_url)
+            safe_driver_get(driver, fallback_url)
             WebDriverWait(driver, 10).until(
                 EC.presence_of_element_located((By.TAG_NAME, "body"))
             )
@@ -196,7 +200,7 @@ def scrape_kitchenaid_manual(model):
         # Fallback: try direct URL
         print("Initial scrape failed, trying fallback URL...")
         fallback_url = f"https://www.kitchenaid.com/owners-center-pdp.{model}.html"
-        driver.get(fallback_url)
+        safe_driver_get(driver, fallback_url)
         WebDriverWait(driver, 10).until(
             EC.presence_of_element_located((By.TAG_NAME, "body"))
         )
@@ -210,7 +214,7 @@ def scrape_kitchenaid_manual(model):
         try:
             print("Trying fallback URL due to error...")
             fallback_url = f"https://www.kitchenaid.com/owners-center-pdp.{model}.html"
-            driver.get(fallback_url)
+            safe_driver_get(driver, fallback_url)
             WebDriverWait(driver, 10).until(
                 EC.presence_of_element_located((By.TAG_NAME, "body"))
             )

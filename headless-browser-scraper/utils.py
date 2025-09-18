@@ -16,11 +16,32 @@ from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.common.action_chains import ActionChains
+from selenium.common.exceptions import TimeoutException
 from bs4 import BeautifulSoup
 import requests
 
 # Import config for BLOB_ROOT
 from app.config import DEFAULT_BLOB_ROOT
+
+
+def safe_driver_get(driver, url, timeout=10):
+    """
+    Safely navigate to a URL with a page load timeout.
+
+    Sets the page load timeout to the specified value, attempts to load the page,
+    and if it times out, logs a warning but continues execution. This prevents
+    indefinite waiting on pages that never fully load.
+
+    Args:
+        driver: Selenium WebDriver instance
+        url (str): The URL to navigate to
+        timeout (int): Timeout in seconds for page load (default 10)
+    """
+    driver.set_page_load_timeout(timeout)
+    try:
+        driver.get(url)
+    except TimeoutException:
+        print(f"Page load timed out after {timeout} seconds for {url}, continuing anyway.")
 
 
 def duckduckgo_fallback(driver, model, host_url, scrape_callback):
@@ -46,7 +67,7 @@ def duckduckgo_fallback(driver, model, host_url, scrape_callback):
     try:
         # Navigate to DuckDuckGo search.
         search_query = f"{model} owner's manual"
-        driver.get(f"https://duckduckgo.com/?q={search_query}")
+        safe_driver_get(driver, f"https://duckduckgo.com/?q={search_query}")
         time.sleep(random.uniform(0.5, 1.0))
 
         print(f"DuckDuckGo search loaded for: {search_query}")

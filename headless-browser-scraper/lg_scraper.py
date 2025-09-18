@@ -33,7 +33,7 @@ from app.config import DEFAULT_BLOB_ROOT
 
 # Import utility functions
 sys.path.append(os.path.join(os.path.dirname(__file__)))
-from utils import duckduckgo_fallback, validate_pdf_file, wait_for_download
+from utils import duckduckgo_fallback, validate_pdf_file, wait_for_download, safe_driver_get
 
 # Global queue and lock for single-instance control
 job_queue = queue.Queue()
@@ -187,7 +187,7 @@ def scrape_lg_manual(model):
 
     try:
         print(f"Fetching page for model {model}...")
-        driver.get(url)
+        safe_driver_get(driver, url)
         print(f"Current URL: {driver.current_url}")
 
         # Wait for JS to render
@@ -207,7 +207,7 @@ def scrape_lg_manual(model):
         if guide_error or page_not_found:
             print(f"Guide error detected for {model}, retrying with lg- prefix...")
             retry_url = f"https://www.lg.com/us/support/product/lg-{model}"
-            driver.get(retry_url)
+            safe_driver_get(driver, retry_url)
             print(f"Retry URL: {driver.current_url}")
             time.sleep(random.uniform(0.03, 0.09))
             # Dismiss consent overlay
