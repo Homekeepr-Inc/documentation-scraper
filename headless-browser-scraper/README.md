@@ -10,16 +10,21 @@ Over time, our risk of getting IP / fingerprint banned will be lower as we amass
 ## How it works
 We use Selenium to orchestrate the browser to download PDFs for various manufacturers. 
 
-We use a queue based system to handle workloads. Currently, we use a parallelism of 1, so only once browser instance loads at a time.
+We use a global queue based system to handle workloads across all scrapers. Currently, we use a parallelism of 2, allowing up to 2 browser instances to load concurrently, regardless of brand.
 
-This is mainly due to RAM constraints. We likely won't need to scale this VPS beyond 2 cores and some extra RAM, if any.
+This prevents resource exhaustion when multiple requests arrive for different brands. Monitor resource usage and adjust the semaphore value in parallelism.py if needed.
 
 Again, as time goes on and we amass more manuals, the calls requiring us to actually scrape will become less and less frequent.
 
 We also don't have hard time requirements. Faster is better, but its okay if it takes ~20 seconds to fetch a manual. Our RAG pipeline takes longer.
 
+## Architecture
+- `parallelism.py`: Manages global job queue and semaphore for controlling concurrent browser instances across all scrapers.
+- Individual scraper modules (e.g., `lg_scraper.py`, `ge_headless_scraper.py`) contain brand-specific scraping logic.
+- API endpoints in `app/main.py` enqueue jobs via `parallelism.py` instead of direct scraping.
+
 ## Conventions
-To ensure timeliness and robustness, we have a few utility functions which should be used in certain cirumstances:
+To ensure timeliness and robustness, we have a few utility functions which should be used in certain circumstances:
 - `safe_driver_get`: like driver.get in Selenium, but adds a 10s timeout to avoid stopping the world and blocking the queue.
   - **Always use this instead of driver.get to avoid blocking the queue!**
 - `wait_for_download`: polls the disk to ensure a file is fully downloaded before continuing i.e attempting to ingest file into sqlite via `ingest_manual`.
