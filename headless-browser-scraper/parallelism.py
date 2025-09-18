@@ -8,15 +8,15 @@ across all scrapers to prevent resource exhaustion.
 
 import queue
 import threading
-import time
 import uuid
 from typing import Dict, Any, Optional
 
+parallelism_count = 2
 # Global queue for all scraper jobs
 job_queue = queue.Queue()
 
 # Semaphore to limit to 2 concurrent browsers
-browser_semaphore = threading.Semaphore(2)
+browser_semaphore = threading.Semaphore(parallelism_count)
 
 # Dict to store job results: job_id -> result
 job_results: Dict[str, Any] = {}
@@ -117,7 +117,7 @@ def worker():
 
 # Start 2 worker threads
 worker_threads = []
-for i in range(2):
+for i in range(parallelism_count):
     t = threading.Thread(target=worker, daemon=True)
     t.start()
     worker_threads.append(t)
