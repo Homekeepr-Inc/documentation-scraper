@@ -29,6 +29,86 @@ sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 from app.ingest import ingest_from_url
 from app.config import DEFAULT_BLOB_ROOT
 
+def fallback_scrape(driver, model, search_url):
+    """
+    Fallback scraping mechanism for Whirlpool manuals.
+    """
+    try:
+        print(f"Owner's Manual link not found for {model} on search page, trying direct owners-center URL...")
+        # Try direct owners-center URL
+        direct_url = f"https://www.whirlpool.com/owners-center-pdp.{model}.html"
+        driver.get(direct_url)
+        print(f"Navigated to direct URL: {direct_url}")
+
+        # Wait for page to load
+        WebDriverWait(driver, 10).until(
+            EC.presence_of_element_located((By.TAG_NAME, "body"))
+        )
+        print("Direct page loaded.")
+
+        # Find and click the owner's manual document link
+        try:
+            # Look for the div containing "Owner's Manual" text
+            manual_div = WebDriverWait(driver, 10).until(
+                EC.presence_of_element_located((By.XPATH, "//div[contains(@class, 'dpc-pdp-resources__document') and .//p[contains(text(), \"Owner's Manual\")]]"))
+            )
+            print("Found owner's manual document div.")
+
+            # Find the link inside the div
+            manual_link = manual_div.find_element(By.TAG_NAME, "a")
+            print("Found manual link, clicking...")
+
+            # Scroll to element and use JavaScript click to avoid interception
+            driver.execute_script("arguments[0].scrollIntoView();", manual_link)
+            time.sleep(0.5)
+            driver.execute_script("arguments[0].click();", manual_link)
+
+            # Wait for download to complete (check for new PDF files)
+            print("Waiting for download to complete...")
+            time.sleep(random.uniform(2.0, 4.0))  # Wait a bit for download to start
+
+            # Check for downloaded PDF
+            download_dir = os.path.abspath(DEFAULT_BLOB_ROOT)
+            downloads = [f for f in os.listdir(download_dir) if f.endswith('.pdf')]
+            if downloads:
+                pdf_path = os.path.join(download_dir, downloads[-1])  # Get the most recent PDF
+                print(f"Downloaded PDF: {pdf_path}")
+
+                # Validate PDF
+                try:
+                    with open(pdf_path, 'rb') as f:
+                        content = f.read()
+                    if not content.startswith(b'%PDF-'):
+                        print(f"File is not a PDF. First bytes: {content[:10]}")
+                        return None
+                    print("Validated as PDF.")
+                except Exception as e:
+                    print(f"Error validating PDF: {e}")
+                    return None
+
+                result = {
+                    'brand': 'whirlpool',
+                    'model_number': model,
+                    'doc_type': 'owner',
+                    'title': "Owner's Manual",
+                    'source_url': direct_url,
+                    'file_url': pdf_path,  # Local file path
+                }
+
+                return result
+            else:
+                print("No PDF downloaded after clicking link")
+                return None
+
+        except Exception as e:
+            print(f"Error finding manual on direct page: {e}")
+            print(f"Direct URL fallback also failed for {model}")
+            return None
+
+    except Exception as e:
+        print(f"An error occurred during fallback scraping for model {model}: {e}")
+        return None
+
 def scrape_whirlpool_manual(model):
     """
     Scrape the owner's manual PDF for a given Whirlpool appliance model.
@@ -127,15 +207,6 @@ def scrape_whirlpool_manual(model):
                     'file_url': pdf_path,  # Local file path
                 }
 
-                ingest_from_url(
-                    brand=result['brand'],
-                    model_number=result['model_number'],
-                    doc_type=result['doc_type'],
-                    title=result['title'],
-                    source_url=result['source_url'],
-                    file_url=result['file_url']
-                )
-
                 return result
             else:
                 print("No PDF downloaded after clicking link")
@@ -143,111 +214,13 @@ def scrape_whirlpool_manual(model):
 
         except Exception as e:
             print(f"Error finding or clicking Owner's Manual link: {e}")
-            print(f"Owner's Manual link not found for {model} on search page, trying direct owners-center URL...")
-            # Try direct owners-center URL
-            direct_url = f"https://www.whirlpool.com/owners-center-pdp.{model}.html"
-            driver.get(direct_url)
-            print(f"Navigated to direct URL: {direct_url}")
-
-            # Wait for page to load
-            WebDriverWait(driver, 10).until(
-                EC.presence_of_element_located((By.TAG_NAME, "body"))
-            )
-            print("Direct page loaded.")
-
-            # Find and click the owner's manual document link
-            try:
-                # Look for the div containing "Owner's Manual" text
-                manual_div = WebDriverWait(driver, 10).until(
-                    EC.presence_of_element_located((By.XPATH, "//div[contains(@class, 'dpc-pdp-resources__document') and .//p[contains(text(), \"Owner's Manual\")]]"))
-                )
-                print("Found owner's manual document div.")
-
-                # Find the link inside the div
-                manual_link = manual_div.find_element(By.TAG_NAME, "a")
-                print("Found manual link, clicking...")
-
-                # Scroll to element and use JavaScript click to avoid interception
-                driver.execute_script("arguments[0].scrollIntoView();", manual_link)
-                time.sleep(0.5)
-                driver.execute_script("arguments[0].click();", manual_link)
-
-                # Wait for download to complete (check for new PDF files)
-                print("Waiting for download to complete...")
-                time.sleep(random.uniform(2.0, 4.0))  # Wait a bit for download to start
-
-                # Check for downloaded PDF
-                download_dir = os.path.abspath(DEFAULT_BLOB_ROOT)
-                downloads = [f for f in os.listdir(download_dir) if f.endswith('.pdf')]
-                if downloads:
-                    pdf_path = os.path.join(download_dir, downloads[-1])  # Get the most recent PDF
-                    print(f"Downloaded PDF: {pdf_path}")
-
-                    # Validate PDF
-                    try:
-                        with open(pdf_path, 'rb') as f:
-                            content = f.read()
-                        if not content.startswith(b'%PDF-'):
-                            print(f"File is not a PDF. First bytes: {content[:10]}")
-                            return None
-                        print("Validated as PDF.")
-                    except Exception as e:
-                        print(f"Error validating PDF: {e}")
-                        return None
-
-                    result = {
-                        'brand': 'whirlpool',
-                        'model_number': model,
-                        'doc_type': 'owner',
-                        'title': "Owner's Manual",
-                        'source_url': direct_url,
-                        'file_url': pdf_path,  # Local file path
-                    }
-
-                    return result
-                else:
-                    print("No PDF downloaded after clicking link")
-                    return None
-
-            except Exception as e:
-                print(f"Error finding manual on direct page: {e}")
-                print(f"Direct URL fallback also failed for {model}")
-                return None
+            return fallback_scrape(driver, model, search_url)
 
     except Exception as e:
         print(f"An error occurred while scraping for model {model}: {e}")
-        import traceback
-        traceback.print_exc()
-        return None
+        return fallback_scrape(driver, model, search_url)
     finally:
         driver.quit()
-
-def main():
-    if len(sys.argv) < 2:
-        print("Usage: python3 whirlpool_headless_scraper.py <model_number1> <model_number2> ...")
-        sys.exit(1)
-    
-    models = sys.argv[1:]
-    for model in models:
-        scrape_whirlpool_manual(model)
-
-def ingest_whirlpool_manual(result):
-    if not result:
-        return None
-    # Import here to avoid circular imports
-    import sys
-    import os
-    sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
-    from app.ingest import ingest_from_url
-    return ingest_from_url(
-        brand=result['brand'],
-        model_number=result['model_number'],
-        doc_type=result['doc_type'],
-        title=result['title'],
-        source_url=result['source_url'],
-        file_url=result['file_url']
-    )
-
 
 def ingest_whirlpool_manual(result):
     if not result:
