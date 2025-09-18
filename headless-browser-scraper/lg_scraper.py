@@ -56,6 +56,9 @@ def scrape_from_lg_page(driver, model):
     try:
         # Perform recorded actions for lg- page
         print("Performing recorded actions for LG page...")
+        # Dismiss consent overlay
+        driver.execute_script("const consent = document.getElementById('transcend-consent-manager'); if (consent) consent.style.display = 'none';")
+        time.sleep(random.uniform(0.03, 0.09))
         # Scroll a bit
         driver.execute_script("window.scrollTo(0,2)")
         time.sleep(random.uniform(0.03, 0.09))
@@ -72,49 +75,39 @@ def scrape_from_lg_page(driver, model):
             print(f"Error clicking manuals tab: {e}")
             return None
 
-        # Mouse over third tab
-        element = driver.find_element(By.CSS_SELECTOR, ".c-tabs__item:nth-child(3) > .c-tabs__item-text")
-        actions = ActionChains(driver)
-        actions.move_to_element(element).perform()
-        time.sleep(random.uniform(0.03, 0.09))
-
-        # Click third tab
-        driver.find_element(By.CSS_SELECTOR, ".c-tabs__item:nth-child(3) > .c-tabs__item-text").click()
-        time.sleep(random.uniform(0.03, 0.09))
-
-        # Scroll to 6268
-        driver.execute_script("window.scrollTo(0,6268.10009765625)")
-        time.sleep(random.uniform(0.03, 0.09))
-
-        # Click title
-        driver.find_element(By.CSS_SELECTOR, "#title-0f0864774a > .cmp-title__text").click()
-        time.sleep(random.uniform(0.03, 0.09))
-
-        # Scroll to 6054
-        driver.execute_script("window.scrollTo(0,6054.10009765625)")
-        time.sleep(random.uniform(0.03, 0.09))
-
-        # Mouse over
-        element = driver.find_element(By.CSS_SELECTOR, ".c-wrapper:nth-child(1) .cmp-container:nth-child(1) .c-list__item:nth-child(1) .c-text-contents:nth-child(1)")
-        actions.move_to_element(element).perform()
-        time.sleep(random.uniform(0.03, 0.09))
-
-        # Click download
-        download_element = driver.find_element(By.CSS_SELECTOR, ".c-resources-wrap:nth-child(1) .c-resources__item--download-info-name")
-        pdf_url = download_element.get_attribute('href')
-
-        if pdf_url:
-            print(f"Got PDF URL from LG page: {pdf_url}")
-        else:
-            download_element.click()
-            time.sleep(random.uniform(1.13, 3.02))
-            downloads = [f for f in os.listdir(download_dir) if f.endswith('.pdf')]
-            if downloads:
-                pdf_url = os.path.join(download_dir, downloads[0])
-                print(f"Downloaded PDF: {pdf_url}")
+        # Get the PDF URL from the button
+        try:
+            button = WebDriverWait(driver, 5).until(
+                EC.element_to_be_clickable((By.CSS_SELECTOR, ".MuiPaper-root:nth-child(1) .MuiGrid-root:nth-child(2) > .MuiTypography-root:nth-child(1)"))
+            )
+            print(f"Button tag: {button.tag_name}")
+            print(f"Button text: {button.text}")
+            print(f"Button href: {button.get_attribute('href')}")
+            print(f"Button onclick: {button.get_attribute('onclick')}")
+            attrs = driver.execute_script("return Array.from(arguments[0].attributes).map(attr => ({name: attr.name, value: attr.value}))", button)
+            data_attrs = [attr for attr in attrs if attr['name'].startswith('data')]
+            print(f"Button data attributes: {[attr['name'] for attr in data_attrs]}")
+            for attr in data_attrs:
+                print(f"  {attr['name']}: {attr['value']}")
+            pdf_url = button.get_attribute('href')
+            if pdf_url:
+                print(f"Got PDF URL from href: {pdf_url}")
             else:
-                print("No PDF found after clicking download")
-                return None
+                print("No href found, clicking button...")
+                button.click()
+                print("Clicked PDF download button.")
+                # Wait for download
+                time.sleep(random.uniform(1.13, 3.02))  # wait for download to complete
+                downloads = [f for f in os.listdir(download_dir) if f.endswith('.pdf')]
+                if downloads:
+                    pdf_url = os.path.join(download_dir, downloads[0])
+                    print(f"Downloaded PDF: {pdf_url}")
+                else:
+                    print("No PDF downloaded")
+                    return None
+        except Exception as e:
+            print(f"Error getting PDF URL: {e}")
+            return None
 
         # Validate PDF
         if pdf_url and (pdf_url.endswith('.pdf') or 'pdf' in pdf_url.lower()):
@@ -175,7 +168,6 @@ def scrape_lg_manual(model):
     # Launch undetected Chrome
     options = uc.ChromeOptions()
     # options.add_argument('--headless')
-    options.add_argument('--headless')
     options.add_argument('--disable-dev-shm-usage')
     options.add_argument('--disable-gpu')
     options.add_argument('--window-size=1920,1080')
