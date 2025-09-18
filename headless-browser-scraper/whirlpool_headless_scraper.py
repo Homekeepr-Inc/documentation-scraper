@@ -48,9 +48,10 @@ def fallback_scrape(driver, model, search_url):
 
         # Find and click the owner's manual document link
         try:
-            # Look for the link containing "Owner's Manual" text
+            print("Searching for Owner's Manual link using data-doc-type")
+            # Look for the div with data-doc-type='owners-manual' and get the a inside it
             manual_link = WebDriverWait(driver, 10).until(
-                EC.presence_of_element_located((By.XPATH, "//a[contains(@class, 'dpc-pdp-resources__document--link') and .//p[contains(text(), \"Owner's Manual\")]]"))
+                EC.presence_of_element_located((By.XPATH, "//div[@data-doc-type='owners-manual']//a"))
             )
             print("Found owner's manual document link.")
 
