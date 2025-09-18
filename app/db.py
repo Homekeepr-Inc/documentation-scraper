@@ -30,6 +30,8 @@ def init_db() -> None:
     # file_sha256 is no longer UNIQUE as we can have multiple models that share the same
     # PDF. If we left it as UNIQUE, we would not be able to cache previously fetched PDFs
     # if they end up being assigned to multiple models.
+    # If you change file_sha256 TEXT to file_sha256 TEXT UNIQUE it will break the scraper 
+    # and every document will be scraped, even it its in the database.
     cur.execute(
         """
         CREATE TABLE IF NOT EXISTS documents (
