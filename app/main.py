@@ -230,7 +230,7 @@ def scrape_kitchenaid(model: str):
 def scrape_whirlpool(model: str):
     # Check DB for existing document
     from .db import get_db
-    doc = get_db().execute("SELECT id, local_path FROM documents WHERE brand = ? AND model_number = ? LIMIT 1", ('whirlpool', model)).fetchone()
+    doc = get_db().execute("SELECT id, local_path FROM documents WHERE brand = ? AND model_number = ? AND local_path IS NOT NULL LIMIT 1", ('whirlpool', model)).fetchone()
     print(f"Checking for existing doc for {model}: {doc}")
     if doc and doc[1]:
         print(f"Returning existing file for {model}")

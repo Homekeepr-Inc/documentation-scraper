@@ -58,6 +58,61 @@ def _english_present(text: str) -> bool:
     except Exception:
         return False
 
+# Added to distinguish between ingesting from a web url and from disk as they are different workflows.
+def ingest_from_local_path(brand: str, model_number: str, doc_type: str, title: str, source_url: str, file_url: str, local_path: str, equipment_category: str = "appliance", equipment_type: str = "unknown") -> IngestResult:
+    # Speed optimization: Check if we already have this URL
+    existing = db.get_db().execute("SELECT file_sha256, pages, size_bytes, english_present FROM documents WHERE file_url = ?", (file_url,)).fetchone()
+    if existing:
+        logger.info(f"Skipping duplicate URL: {file_url}")
+        return IngestResult(id=None, sha256=existing[0], pages=existing[1], size_bytes=existing[2], english_present=bool(existing[3]))
+    
+    logger.info(f"Ingesting PDF from local path: {local_path}")
+    with open(local_path, 'rb') as f:
+        pdf_bytes = f.read()
+    
+    size_bytes = len(pdf_bytes)
+    sha = _sha256_bytes(pdf_bytes)
+    
+    text, pages = _extract_text_and_pages(pdf_bytes)
+    english = _english_present(text)
+
+    pdf_path, text_path = paths_for(brand, model_number, doc_type, sha, equipment_category)
+    if not pdf_path.exists():
+        pdf_path.write_bytes(pdf_bytes)
+    if text:
+        with gzip.open(text_path, "wt", encoding="utf-8") as f:
+            f.write(text)
+
+    now = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+
+    doc = {
+        "brand": brand.lower(),
+        "model_number": model_number,
+        "doc_type": doc_type,
+        "equipment_category": equipment_category,
+        "equipment_type": equipment_type,
+        "title": title,
+        "language": "en" if english else None,
+        "published_at": None,
+        "source_url": source_url,
+        "file_url": file_url,
+        "file_sha256": sha,
+        "size_bytes": size_bytes,
+        "pages": pages,
+        "ocr_applied": 0,
+        "english_present": 1 if english else 0,
+        "status": "ok",
+        "http_status": 200,
+        "local_path": str(pdf_path),
+        "text_path": str(text_path),
+        "text": text,
+        "ingested_at": now,
+        "last_seen_at": now,
+    }
+
+    doc_id = db.insert_or_ignore_document(doc)
+    return IngestResult(id=doc_id, sha256=sha, pages=pages, size_bytes=size_bytes, english_present=english)
+
 
 def ingest_from_url(brand: str, model_number: str, doc_type: str, title: str, source_url: str, file_url: str, equipment_category: str = "appliance", equipment_type: str = "unknown") -> IngestResult:
     # Speed optimization: Check if we already have this URL

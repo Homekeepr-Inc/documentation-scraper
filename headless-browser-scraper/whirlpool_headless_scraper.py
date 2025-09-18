@@ -56,7 +56,11 @@ def fallback_scrape(driver, model, search_url):
 
             # Find the link inside the div
             manual_link = manual_div.find_element(By.TAG_NAME, "a")
-            print("Found manual link, clicking...")
+            file_url = manual_link.get_attribute("href")
+            print(f"Found manual link: {file_url}")
+
+            download_dir = os.path.abspath(DEFAULT_BLOB_ROOT)
+            files_before = set(os.listdir(download_dir))
 
             # Scroll to element and use JavaScript click to avoid interception
             driver.execute_script("arguments[0].scrollIntoView();", manual_link)
@@ -65,26 +69,15 @@ def fallback_scrape(driver, model, search_url):
 
             # Wait for download to complete (check for new PDF files)
             print("Waiting for download to complete...")
-            time.sleep(random.uniform(2.0, 4.0))  # Wait a bit for download to start
+            time.sleep(random.uniform(4.0, 6.0))  # Wait a bit for download to start
 
-            # Check for downloaded PDF
-            download_dir = os.path.abspath(DEFAULT_BLOB_ROOT)
-            downloads = [f for f in os.listdir(download_dir) if f.endswith('.pdf')]
-            if downloads:
-                pdf_path = os.path.join(download_dir, downloads[-1])  # Get the most recent PDF
+            files_after = set(os.listdir(download_dir))
+            new_files = files_after - files_before
+
+            if new_files:
+                new_filename = new_files.pop()
+                pdf_path = os.path.join(download_dir, new_filename)
                 print(f"Downloaded PDF: {pdf_path}")
-
-                # Validate PDF
-                try:
-                    with open(pdf_path, 'rb') as f:
-                        content = f.read()
-                    if not content.startswith(b'%PDF-'):
-                        print(f"File is not a PDF. First bytes: {content[:10]}")
-                        return None
-                    print("Validated as PDF.")
-                except Exception as e:
-                    print(f"Error validating PDF: {e}")
-                    return None
 
                 result = {
                     'brand': 'whirlpool',
@@ -92,13 +85,18 @@ def fallback_scrape(driver, model, search_url):
                     'doc_type': 'owner',
                     'title': "Owner's Manual",
                     'source_url': direct_url,
-                    'file_url': pdf_path,  # Local file path
+                    'file_url': file_url,
+                    'local_path': pdf_path,
                 }
 
                 return result
             else:
-                print("No PDF downloaded after clicking link")
+                print("No new PDF downloaded after clicking link")
+                crdownload_files = [f for f in os.listdir(download_dir) if f.endswith('.crdownload')]
+                if crdownload_files:
+                    print(f"Found partial download files: {crdownload_files}. Download may be slow or stuck.")
                 return None
+
 
         except Exception as e:
             print(f"Error finding manual on direct page: {e}")
@@ -169,7 +167,11 @@ def scrape_whirlpool_manual(model):
             owners_manual_link = WebDriverWait(driver, 10).until(
                 EC.presence_of_element_located((By.XPATH, "//a[contains(@class, 'clp-item-link') and contains(text(), \"Owner's Manual\")]"))
             )
-            print("Found Owner's Manual link, clicking...")
+            file_url = owners_manual_link.get_attribute("href")
+            print(f"Found Owner's Manual link: {file_url}")
+
+            download_dir = os.path.abspath(DEFAULT_BLOB_ROOT)
+            files_before = set(os.listdir(download_dir))
 
             # Scroll to element and use JavaScript click to avoid interception
             driver.execute_script("arguments[0].scrollIntoView();", owners_manual_link)
@@ -178,25 +180,15 @@ def scrape_whirlpool_manual(model):
 
             # Wait for download to complete (check for new PDF files)
             print("Waiting for download to complete...")
-            time.sleep(random.uniform(2.0, 4.0))  # Wait a bit for download to start
+            time.sleep(random.uniform(4.0, 6.0))  # Wait a bit for download to start
 
-            # Check for downloaded PDF
-            downloads = [f for f in os.listdir(download_dir) if f.endswith('.pdf')]
-            if downloads:
-                pdf_path = os.path.join(download_dir, downloads[-1])  # Get the most recent PDF
+            files_after = set(os.listdir(download_dir))
+            new_files = files_after - files_before
+
+            if new_files:
+                new_filename = new_files.pop()
+                pdf_path = os.path.join(download_dir, new_filename)
                 print(f"Downloaded PDF: {pdf_path}")
-
-                # Validate PDF
-                try:
-                    with open(pdf_path, 'rb') as f:
-                        content = f.read()
-                    if not content.startswith(b'%PDF-'):
-                        print(f"File is not a PDF. First bytes: {content[:10]}")
-                        return None
-                    print("Validated as PDF.")
-                except Exception as e:
-                    print(f"Error validating PDF: {e}")
-                    return None
 
                 result = {
                     'brand': 'whirlpool',
@@ -204,12 +196,16 @@ def scrape_whirlpool_manual(model):
                     'doc_type': 'owner',
                     'title': "Owner's Manual",
                     'source_url': search_url,
-                    'file_url': pdf_path,  # Local file path
+                    'file_url': file_url,
+                    'local_path': pdf_path,
                 }
 
                 return result
             else:
-                print("No PDF downloaded after clicking link")
+                print("No new PDF downloaded after clicking link")
+                crdownload_files = [f for f in os.listdir(download_dir) if f.endswith('.crdownload')]
+                if crdownload_files:
+                    print(f"Found partial download files: {crdownload_files}. Download may be slow or stuck.")
                 return None
 
         except Exception as e:
@@ -229,14 +225,15 @@ def ingest_whirlpool_manual(result):
     import sys
     import os
     sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
-    from app.ingest import ingest_from_url
-    return ingest_from_url(
+    from app.ingest import ingest_from_local_path
+    return ingest_from_local_path(
         brand=result['brand'],
         model_number=result['model_number'],
         doc_type=result['doc_type'],
         title=result['title'],
         source_url=result['source_url'],
-        file_url=result['file_url']
+        file_url=result['file_url'],
+        local_path=result['local_path']
     )
 
 
