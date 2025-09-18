@@ -163,9 +163,8 @@ def scrape_whirlpool_manual(model):
 
         # Find and click the Owner's Manual link
         try:
-            owners_manual_link = WebDriverWait(driver, 10).until(
-                EC.presence_of_element_located((By.XPATH, "//a[contains(@class, 'clp-item-link') and contains(text(), \"Owner's Manual\")]"))
-            )
+            owners_manual_link = EC.presence_of_element_located((By.XPATH, "//a[contains(@class, 'clp-item-link') and contains(text(), \"Owner's Manual\")]"))
+            
             file_url = owners_manual_link.get_attribute("href")
             file_url = urljoin(driver.current_url, file_url)
             print(f"Found Owner's Manual link: {file_url}")
@@ -219,22 +218,8 @@ def scrape_whirlpool_manual(model):
         driver.quit()
 
 def ingest_whirlpool_manual(result):
-    if not result:
-        return None
-    # Import here to avoid circular imports
-    import sys
-    import os
-    sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
-    from app.ingest import ingest_from_local_path
-    return ingest_from_local_path(
-        brand=result['brand'],
-        model_number=result['model_number'],
-        doc_type=result['doc_type'],
-        title=result['title'],
-        source_url=result['source_url'],
-        file_url=result['file_url'],
-        local_path=result['local_path']
-    )
+    from utils import ingest_manual
+    return ingest_manual(result)
 
 
 def main():
