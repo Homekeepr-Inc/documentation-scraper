@@ -25,9 +25,12 @@ We also don't have hard time requirements. Faster is better, but its okay if it 
 - Individual scraper modules (e.g., `lg_scraper.py`, `ge_headless_scraper.py`) contain brand-specific scraping logic.
 - API endpoints in `app/main.py` enqueue jobs via `parallelism.py` instead of direct scraping.
 
-## Conventions
+## Conventions to Follow (Important!)
 To ensure timeliness and robustness, we have a few utility functions which should be used in certain circumstances:
 - `safe_driver_get`: like driver.get in Selenium, but adds a 10s timeout to avoid stopping the world and blocking the queue.
   - **Always use this instead of driver.get to avoid blocking the queue!**
 - `wait_for_download`: polls the disk to ensure a file is fully downloaded before continuing i.e attempting to ingest file into sqlite via `ingest_manual`.
+  - **Always use this instead of implementing something else yourself!**
 - `duckduckgo_fallback`: if all scraper attempts fail, we have one final escape hatch to try and find the correct product page containing the desired manual. Note that this is a generic search for a particular model number, and is manufacturer-agnostic on purpose. Because of this, a brand-specific fallback function must be passed into `duckduckgo_fallback` to run if the duckduckgo fallback succeeds to find a page we support scraping for.
+- Every pdf must be saved to disk via `ingest_manual` after being validated by `validate_pdf_file`.
+  - **Always do this!**

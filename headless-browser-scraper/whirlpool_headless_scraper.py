@@ -30,7 +30,6 @@ from utils import safe_driver_get
 # Add project root to sys.path
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
-from app.ingest import ingest_from_url
 from app.config import DEFAULT_BLOB_ROOT
 
 def fallback_scrape(driver, model, search_url):
