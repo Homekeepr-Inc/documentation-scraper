@@ -60,11 +60,11 @@ def _english_present(text: str) -> bool:
 
 # Added to distinguish between ingesting from a web url and from disk as they are different workflows.
 def ingest_from_local_path(brand: str, model_number: str, doc_type: str, title: str, source_url: str, file_url: str, local_path: str, equipment_category: str = "appliance", equipment_type: str = "unknown") -> IngestResult:
-    # Speed optimization: Check if we already have this URL
-    existing = db.get_db().execute("SELECT file_sha256, pages, size_bytes, english_present FROM documents WHERE file_url = ?", (file_url,)).fetchone()
+    # Check if we already have this document (by brand, model, doc_type)
+    existing = db.get_db().execute("SELECT id, file_sha256, pages, size_bytes, english_present FROM documents WHERE brand = ? AND model_number = ? AND doc_type = ?", (brand.lower(), model_number, doc_type)).fetchone()
     if existing:
-        logger.info(f"Skipping duplicate URL: {file_url}")
-        return IngestResult(id=None, sha256=existing[0], pages=existing[1], size_bytes=existing[2], english_present=bool(existing[3]))
+        logger.info(f"Skipping duplicate document: {brand} {model_number} {doc_type}")
+        return IngestResult(id=existing[0], sha256=existing[1], pages=existing[2], size_bytes=existing[3], english_present=bool(existing[4]))
     
     logger.info(f"Ingesting PDF from local path: {local_path}")
     with open(local_path, 'rb') as f:
@@ -115,11 +115,11 @@ def ingest_from_local_path(brand: str, model_number: str, doc_type: str, title: 
 
 
 def ingest_from_url(brand: str, model_number: str, doc_type: str, title: str, source_url: str, file_url: str, equipment_category: str = "appliance", equipment_type: str = "unknown") -> IngestResult:
-    # Speed optimization: Check if we already have this URL
-    existing = db.get_db().execute("SELECT file_sha256, pages, size_bytes, english_present FROM documents WHERE file_url = ?", (file_url,)).fetchone()
+    # Check if we already have this document (by brand, model, doc_type)
+    existing = db.get_db().execute("SELECT id, file_sha256, pages, size_bytes, english_present FROM documents WHERE brand = ? AND model_number = ? AND doc_type = ?", (brand.lower(), model_number, doc_type)).fetchone()
     if existing:
-        logger.info(f"Skipping duplicate URL: {file_url}")
-        return IngestResult(id=None, sha256=existing[0], pages=existing[1], size_bytes=existing[2], english_present=bool(existing[3]))
+        logger.info(f"Skipping duplicate document: {brand} {model_number} {doc_type}")
+        return IngestResult(id=existing[0], sha256=existing[1], pages=existing[2], size_bytes=existing[3], english_present=bool(existing[4]))
     
     logger.info(f"Downloading PDF: {file_url}")
     http_status = 200  # Default for local files

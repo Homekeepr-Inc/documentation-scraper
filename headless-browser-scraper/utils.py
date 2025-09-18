@@ -128,3 +128,39 @@ def wait_for_download(download_dir, timeout=30):
         time.sleep(0.5)
 
     return None
+
+
+def ingest_manual(result):
+    """
+    Generic function to ingest a scraped manual result into the database.
+
+    Args:
+        result (dict): Scraped result containing brand, model_number, doc_type, title, source_url, file_url
+                       Optionally local_path if downloaded locally.
+
+    Returns:
+        IngestResult: Result of the ingestion
+    """
+    if not result:
+        return None
+    # Import here to avoid circular imports
+    from app.ingest import ingest_from_local_path, ingest_from_url
+    if 'local_path' in result:
+        return ingest_from_local_path(
+            brand=result['brand'],
+            model_number=result['model_number'],
+            doc_type=result['doc_type'],
+            title=result['title'],
+            source_url=result['source_url'],
+            file_url=result['file_url'],
+            local_path=result['local_path']
+        )
+    else:
+        return ingest_from_url(
+            brand=result['brand'],
+            model_number=result['model_number'],
+            doc_type=result['doc_type'],
+            title=result['title'],
+            source_url=result['source_url'],
+            file_url=result['file_url']
+        )

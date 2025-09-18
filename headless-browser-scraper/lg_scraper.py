@@ -452,21 +452,8 @@ def download_file(url, filename):
         print(f"Error downloading {url}: {e}")
 
 def ingest_lg_manual(result):
-    if not result:
-        return None
-    # Import here to avoid circular imports
-    import sys
-    import os
-    sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
-    from app.ingest import ingest_from_url
-    return ingest_from_url(
-        brand=result['brand'],
-        model_number=result['model_number'],
-        doc_type=result['doc_type'],
-        title=result['title'],
-        source_url=result['source_url'],
-        file_url=result['file_url']
-    )
+    from utils import ingest_manual
+    return ingest_manual(result)
 def main():
     if len(sys.argv) < 2:
         print("Usage: python3 lg_scraper.py <model_number1> <model_number2> ...")
