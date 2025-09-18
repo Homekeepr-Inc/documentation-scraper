@@ -17,18 +17,33 @@ The target element is an `<a>` tag with the class `clp-item-link` and the text "
 
 ## Step-by-Step Scraping Process
 
-1.  **URL Construction**: Build the search URL using the pattern `https://www.whirlpool.com/results.html?term=<model_number>`.
-2.  **Headless Browser Initialization**: Launch `undetected-chromedriver` in headless mode.
-3.  **Page Fetch**: Navigate to the constructed URL and wait for the page to load.
-4.  **Link Extraction**: Find the `<a>` tag with the class `clp-item-link` and the text "Owner's Manual".
-5.  **URL Construction**: Extract the `href` attribute and join it with `https://www.whirlpool.com/` to create the full PDF URL.
-6.  **Ingestion**: Pass the collected data to the `ingest_from_url` function to download the PDF and store its metadata.
+1.  **URL Construction**: Build the search URL using the pattern `https://www.whirlpool.com/results.html?term={model_number}`.
+
+2.  **Headless Browser Initialization**: Launch `undetected-chromedriver` in headless mode with download preferences.
+
+3.  **Page Fetch**: Navigate to the search URL and wait for the page to load.
+
+4.  **Link Extraction**: Find the `<a>` tag with class `clp-item-link` and text "Owner's Manual". Extract the href and navigate to it, triggering PDF download. Wait for download, rename to `{model}.pdf`.
+
+5.  **Fallback Mechanism**: If "Owner's Manual" link not found on search page, try direct URL `https://www.whirlpool.com/owners-center-pdp.{model}.html`. On this page, find the div with `data-doc-type="owners-manual"` and click the nested `<a>` to download the PDF.
+
+6.  **Data Collection**: Collect metadata:
+    * `brand`: "whirlpool"
+    * `model_number`: The model number.
+    * `doc_type`: "owner"
+    * `title`: "Owner's Manual"
+    * `source_url`: The page URL.
+    * `file_url`: Local path to downloaded PDF (e.g., `/path/to/blob/{model}.pdf`).
+
+7.  **Ingestion**: Pass data to ingestion function for duplicate checking by file_url and SHA256 hash, then store document and metadata.
 
 ## How to Run
 
 ```bash
 python3 headless-browser-scraper/whirlpool_headless_scraper.py WRT311FZDW
 ```
+
+It downloads the PDF locally and ingests it into the database.
 
 ## Example Model Numbers
 curl -H "X-Homekeepr-Scraper: $SCRAPER_SECRET" http://localhost:8000/scrape/whirlpool/WRX735SDHZ 

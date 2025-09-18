@@ -21,7 +21,7 @@ The link text contains the document type (e.g., "Owner's Manual").
 
 1. **Initial Navigation**: Navigate to `https://www.kitchenaid.com/owners.html`.
 
-2. **Headless Browser Initialization**: Launch `undetected-chromedriver` in headless mode with stealth options to avoid bot detection.
+2. **Headless Browser Initialization**: Launch `undetected-chromedriver` in headless mode with stealth options to avoid bot detection, configured for automatic PDF downloads.
 
 3. **Page Fetch**: Navigate to the owners page and wait for the page to load fully.
 
@@ -29,19 +29,19 @@ The link text contains the document type (e.g., "Owner's Manual").
 
 5. **Enter Model Number**: Click on the input field and type the model number.
 
-6. **Select Model**: Click on the link matching the model number.
+6. **Select Model**: Click on the link matching the model number to navigate to the model-specific page.
 
-7. **Navigate to Manual Page**: Click on the element that opens the manual page in a new window and switch to it.
+7. **PDF Extraction on Model Page**: On the model page, find the first `<a>` tag with an `href` ending in `.pdf`. Navigate to the PDF URL, which triggers an automatic download. Wait for the download to complete and rename the file to `{model}.pdf` in the blob directory.
 
-8. **PDF Link Extraction**: Check if the new page is a direct PDF URL. If so, use it directly. Otherwise, on the manual page, find all `<a>` tags with an `href` ending in `.pdf`. Extract the title from the link text or URL and determine the `doc_type` based on keywords (e.g., "install" → "installation", "service" → "service", else "owner").
+8. **Fallback Mechanism**: If the model link is not found or scraping fails, attempt a direct URL fallback to `https://www.kitchenaid.com/owners-center-pdp.{model}.html` and repeat the PDF extraction process.
 
-9. **Data Collection**: For each PDF found, collect the following metadata:
+9. **Data Collection**: Collect the following metadata:
     *   `brand`: "kitchenaid"
     *   `model_number`: The model number provided.
-    *   `doc_type`: The type inferred from the title.
-    *   `title`: The text of the PDF link.
+    *   `doc_type`: "owner" (default, can be refined based on URL keywords like "install" or "service").
+    *   `title`: "Owner's Manual" or inferred from URL (e.g., "Installation Manual" if "install" in URL).
     *   `source_url`: The URL of the page where the PDF was found.
-    *   `file_url`: The absolute URL of the PDF file.
+    *   `file_url`: The local file path to the downloaded PDF (e.g., `/path/to/blob/{model}.pdf`).
 
 10. **Ingestion**: Pass the collected data to the ingestion function, which checks for duplicates by `file_url` and SHA256 hash before storing the document and its metadata.
 
