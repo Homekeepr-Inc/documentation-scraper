@@ -1,5 +1,6 @@
 import sys
 import os
+import asyncio
 from typing import Optional
 
 from fastapi import FastAPI, HTTPException, Request
@@ -11,10 +12,11 @@ from .db import init_db, fetch_document, search_documents
 
 # Add path for headless scraper
 sys.path.append(os.path.join(os.path.dirname(__file__), '..', 'headless-browser-scraper'))
-from ge_headless_scraper import scrape_ge_manual, ingest_ge_manual
-from lg_scraper import scrape_lg_manual, ingest_lg_manual
-from kitchenaid_headless_scraper import scrape_kitchenaid_manual, ingest_kitchenaid_manual
-from whirlpool_headless_scraper import scrape_whirlpool_manual, ingest_whirlpool_manual
+from parallelism import enqueue_scrape_job, get_job_result
+from ge_headless_scraper import ingest_ge_manual
+from lg_scraper import ingest_lg_manual
+from kitchenaid_headless_scraper import ingest_kitchenaid_manual
+from whirlpool_headless_scraper import ingest_whirlpool_manual
 
 templates = Jinja2Templates(directory="app/templates")
 
@@ -116,86 +118,30 @@ def get_document_text(doc_id: int):
     raise HTTPException(status_code=404, detail="Text not available")
 
 
-@app.get("/scrape/ge/{model}")
-def scrape_ge(model: str):
+@app.get("/scrape/{brand}/{model}")
+async def scrape_brand_model(brand: str, model: str):
+    brand = brand.lower()
+    supported_brands = {'ge', 'lg', 'kitchenaid', 'whirlpool'}
+    if brand not in supported_brands:
+        raise HTTPException(status_code=400, detail="Unsupported brand")
+
     # Check DB for existing document
+    loop = asyncio.get_event_loop()
     from .db import get_db
-    doc = get_db().execute("SELECT id, local_path FROM documents WHERE brand = ? AND model_number = ? AND local_path IS NOT NULL LIMIT 1", ('ge', model)).fetchone()
+    doc = await loop.run_in_executor(None, lambda: get_db().execute("SELECT id, local_path FROM documents WHERE brand = ? AND model_number = ? AND local_path IS NOT NULL LIMIT 1", (brand, model)).fetchone())
     if doc:
         return FileResponse(doc[1], media_type="application/pdf")
 
-    # Not cached, proceed to scrape
-    result = scrape_ge_manual(model)
-    if not result:
-        raise HTTPException(status_code=404, detail="No manual found")
+    # Not cached, enqueue scrape job
+    job_id = enqueue_scrape_job(brand, model)
 
-    ingest_result = ingest_ge_manual(result)
-    if not ingest_result or not ingest_result.id:
-        # Check if already exists
-        doc = get_db().execute("SELECT id FROM documents WHERE file_url = ?", (result['file_url'],)).fetchone()
-        if doc:
-            doc_id = doc[0]
-        else:
-            raise HTTPException(status_code=500, detail="Failed to ingest")
-    else:
-        doc_id = ingest_result.id
+    # Wait for result
+    while True:
+        result = get_job_result(job_id)
+        if result is not None:
+            break
+        await asyncio.sleep(0.5)
 
-    # Serve the file
-    doc = fetch_document(doc_id)
-    if not doc:
-        raise HTTPException(status_code=404, detail="Document not found")
-    path = doc.get("local_path")
-    if not path:
-        raise HTTPException(status_code=404, detail="File not stored locally")
-    return FileResponse(path, media_type="application/pdf")
-
-
-@app.get("/scrape/lg/{model}")
-def scrape_lg(model: str):
-    # Check DB for existing document
-    from .db import get_db
-    doc = get_db().execute("SELECT id, local_path FROM documents WHERE brand = ? AND model_number = ? AND local_path IS NOT NULL LIMIT 1", ('lg', model)).fetchone()
-    if doc:
-        return FileResponse(doc[1], media_type="application/pdf")
-
-    # Not cached, proceed to scrape
-    result = scrape_lg_manual(model)
-    if not result:
-        raise HTTPException(status_code=404, detail="No manual found")
-
-    ingest_result = ingest_lg_manual(result)
-    if not ingest_result or not ingest_result.id:
-        # Check if already exists
-        doc = get_db().execute("SELECT id FROM documents WHERE file_url = ?", (result['file_url'],)).fetchone()
-        if doc:
-            doc_id = doc[0]
-        else:
-            raise HTTPException(status_code=500, detail="Failed to ingest")
-    else:
-        doc_id = ingest_result.id
-
-    # Serve the file
-    doc = fetch_document(doc_id)
-    if not doc:
-        raise HTTPException(status_code=404, detail="Document not found")
-    path = doc.get("local_path")
-    if not path:
-        raise HTTPException(status_code=404, detail="File not stored locally")
-    return FileResponse(path, media_type="application/pdf")
-
-
-@app.get("/scrape/kitchenaid/{model}")
-def scrape_kitchenaid(model: str):
-    # Check DB for existing document
-    from .db import get_db
-    doc = get_db().execute("SELECT id, local_path FROM documents WHERE brand = ? AND model_number = ? LIMIT 1", ('kitchenaid', model)).fetchone()
-    print(f"Checking for existing doc for {model}: {doc}")
-    if doc and doc[1]:
-        print(f"Returning existing file for {model}")
-        return FileResponse(doc[1], media_type="application/pdf")
-
-    # Not cached, proceed to scrape
-    result = scrape_kitchenaid_manual(model)
     if not result:
         raise HTTPException(status_code=404, detail="No manual found")
 
@@ -203,12 +149,20 @@ def scrape_kitchenaid(model: str):
     if isinstance(result, list):
         result = result[0]
 
-    ingest_result = ingest_kitchenaid_manual(result)
-    print(f"Ingest result for {model}: {ingest_result}")
+    # Select ingest function based on brand
+    if brand == 'ge':
+        ingest_func = ingest_ge_manual
+    elif brand == 'lg':
+        ingest_func = ingest_lg_manual
+    elif brand == 'kitchenaid':
+        ingest_func = ingest_kitchenaid_manual
+    elif brand == 'whirlpool':
+        ingest_func = ingest_whirlpool_manual
+
+    ingest_result = await loop.run_in_executor(None, ingest_func, result)
     if not ingest_result or not ingest_result.id:
         # Check if already exists
-        doc = get_db().execute("SELECT id FROM documents WHERE file_url = ?", (result['file_url'],)).fetchone()
-        print(f"Checking file_url for {model}: {doc}")
+        doc = await loop.run_in_executor(None, lambda: get_db().execute("SELECT id FROM documents WHERE file_url = ?", (result['file_url'],)).fetchone())
         if doc:
             doc_id = doc[0]
         else:
@@ -217,7 +171,7 @@ def scrape_kitchenaid(model: str):
         doc_id = ingest_result.id
 
     # Serve the file
-    doc = fetch_document(doc_id)
+    doc = await loop.run_in_executor(None, fetch_document, doc_id)
     if not doc:
         raise HTTPException(status_code=404, detail="Document not found")
     path = doc.get("local_path")
@@ -226,41 +180,13 @@ def scrape_kitchenaid(model: str):
     return FileResponse(path, media_type="application/pdf")
 
 
-@app.get("/scrape/whirlpool/{model}")
-def scrape_whirlpool(model: str):
-    # Check DB for existing document
-    from .db import get_db
-    doc = get_db().execute("SELECT id, local_path FROM documents WHERE brand = ? AND model_number = ? AND local_path IS NOT NULL LIMIT 1", ('whirlpool', model)).fetchone()
-    print(f"Checking for existing doc for {model}: {doc}")
-    if doc and doc[1]:
-        print(f"Returning existing file for {model}")
-        return FileResponse(doc[1], media_type="application/pdf")
 
-    # Not cached, proceed to scrape
-    result = scrape_whirlpool_manual(model)
-    if not result:
-        raise HTTPException(status_code=404, detail="No manual found")
 
-    print(f"Scraped result for {model}: {result}")
-    ingest_result = ingest_whirlpool_manual(result)
-    print(f"Ingest result for {model}: {ingest_result}")
 
-    if not ingest_result or not ingest_result.id:
-        # Check if already exists
-        doc = get_db().execute("SELECT id FROM documents WHERE file_url = ?", (result['file_url'],)).fetchone()
-        print(f"Checking file_url for {model}: {doc}")
-        if doc:
-            doc_id = doc[0]
-        else:
-            raise HTTPException(status_code=500, detail="Failed to ingest")
-    else:
-        doc_id = ingest_result.id
 
-    # Serve the file
-    doc = fetch_document(doc_id)
-    if not doc:
-        raise HTTPException(status_code=404, detail="Document not found")
-    path = doc.get("local_path")
-    if not path:
-        raise HTTPException(status_code=404, detail="File not stored locally")
-    return FileResponse(path, media_type="application/pdf")
+
+
+
+
+
+

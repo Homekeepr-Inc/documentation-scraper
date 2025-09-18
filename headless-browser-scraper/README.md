@@ -8,11 +8,13 @@ Most providers, as of Sep 2025, do not heavily fingerprint the browser to a leve
 Over time, our risk of getting IP / fingerprint banned will be lower as we amass more manuals i.e we've already crawled the request model number before; and thus can serve the file from disk.
 
 ## How it works
-We use Selenium to orchestrate the browser to download PDFs for various manufacturers. 
+We use Selenium to orchestrate the browser to download PDFs for various manufacturers.
 
 We use a global queue based system to handle workloads across all scrapers. Currently, we use a parallelism of 2, allowing up to 2 browser instances to load concurrently, regardless of brand.
 
 This prevents resource exhaustion when multiple requests arrive for different brands. Monitor resource usage and adjust the semaphore value in parallelism.py if needed.
+
+The API provides a single consolidated endpoint `/scrape/{brand}/{model}` that handles all supported brands (GE, LG, Kitchenaid, Whirlpool). Requests are enqueued globally and processed asynchronously.
 
 Again, as time goes on and we amass more manuals, the calls requiring us to actually scrape will become less and less frequent.
 
