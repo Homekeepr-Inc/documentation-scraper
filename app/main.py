@@ -17,6 +17,7 @@ from ge_headless_scraper import ingest_ge_manual
 from lg_scraper import ingest_lg_manual
 from kitchenaid_headless_scraper import ingest_kitchenaid_manual
 from whirlpool_headless_scraper import ingest_whirlpool_manual
+from samsung_headless_scraper import ingest_samsung_manual
 
 templates = Jinja2Templates(directory="app/templates")
 
@@ -121,7 +122,7 @@ def get_document_text(doc_id: int):
 @app.get("/scrape/{brand}/{model}")
 async def scrape_brand_model(brand: str, model: str):
     brand = brand.lower()
-    supported_brands = {'ge', 'lg', 'kitchenaid', 'whirlpool'}
+    supported_brands = {'ge', 'lg', 'kitchenaid', 'whirlpool', 'samsung'}
     if brand not in supported_brands:
         raise HTTPException(status_code=400, detail="Unsupported brand")
 
@@ -158,6 +159,8 @@ async def scrape_brand_model(brand: str, model: str):
         ingest_func = ingest_kitchenaid_manual
     elif brand == 'whirlpool':
         ingest_func = ingest_whirlpool_manual
+    elif brand == 'samsung':
+        ingest_func = ingest_samsung_manual
 
     ingest_result = await loop.run_in_executor(None, ingest_func, result)
     if not ingest_result or not ingest_result.id:

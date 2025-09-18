@@ -101,6 +101,9 @@ def worker():
             elif brand == 'kitchenaid':
                 from kitchenaid_headless_scraper import scrape_kitchenaid_manual
                 result = scrape_kitchenaid_manual(model)
+            elif brand == 'samsung':
+                from samsung_headless_scraper import scrape_samsung_manual
+                result = scrape_samsung_manual(model)
             else:
                 result = None  # Unknown brand
 
