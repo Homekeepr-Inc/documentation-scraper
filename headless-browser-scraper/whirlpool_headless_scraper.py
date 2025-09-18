@@ -48,15 +48,14 @@ def fallback_scrape(driver, model, search_url):
 
         # Find and click the owner's manual document link
         try:
-            # Look for the div containing "Owner's Manual" text
-            manual_div = WebDriverWait(driver, 10).until(
-                EC.presence_of_element_located((By.XPATH, "//div[contains(@class, 'dpc-pdp-resources__document') and .//p[contains(text(), \"Owner's Manual\")]]"))
+            # Look for the link containing "Owner's Manual" text
+            manual_link = WebDriverWait(driver, 10).until(
+                EC.presence_of_element_located((By.XPATH, "//a[contains(@class, 'dpc-pdp-resources__document--link') and .//p[contains(text(), \"Owner's Manual\")]]"))
             )
-            print("Found owner's manual document div.")
+            print("Found owner's manual document link.")
 
-            # Find the link inside the div
-            manual_link = manual_div.find_element(By.TAG_NAME, "a")
             file_url = manual_link.get_attribute("href")
+            file_url = urljoin(direct_url, file_url)
             print(f"Found manual link: {file_url}")
 
             download_dir = os.path.abspath(DEFAULT_BLOB_ROOT)
@@ -168,6 +167,7 @@ def scrape_whirlpool_manual(model):
                 EC.presence_of_element_located((By.XPATH, "//a[contains(@class, 'clp-item-link') and contains(text(), \"Owner's Manual\")]"))
             )
             file_url = owners_manual_link.get_attribute("href")
+            file_url = urljoin(driver.current_url, file_url)
             print(f"Found Owner's Manual link: {file_url}")
 
             download_dir = os.path.abspath(DEFAULT_BLOB_ROOT)
