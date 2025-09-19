@@ -85,33 +85,111 @@ def scrape_ge_manual(model):
             page_source = driver.page_source
             soup = BeautifulSoup(page_source, 'html.parser')
 
-            # Find all potential model links
-            links = soup.find_all('a', href=re.compile(r'/store/parts/assembly/'))
-            
-            best_match_url = None
-            highest_similarity = 0.0
+            # Handle cookie consent if present
+            try:
+                driver.find_element(By.CSS_SELECTOR, ".onetrust-pc-dark-filter").click()
+                time.sleep(1)
+                driver.switch_to.frame(4)
+                driver.find_element(By.CSS_SELECTOR, ".mat-mdc-button-touch-target").click()
+                driver.switch_to.default_content()
+                driver.find_element(By.ID, "onetrust-pc-btn-handler").click()
+                driver.find_element(By.CSS_SELECTOR, ".save-preference-btn-handler").click()
+                time.sleep(1)
+            except Exception as e:
+                print(f"Cookie handling skipped or failed: {e}")
 
-            for link in links:
-                link_text = link.get_text(strip=True)
-                similarity = similar(model.upper(), link_text.upper())
-                
-                if similarity > highest_similarity:
-                    highest_similarity = similarity
-                    if isinstance(link, Tag) and link.get('href'):
-                         best_match_url = urljoin(driver.current_url, str(link['href']))
-
-            if highest_similarity >= 0.75 and best_match_url:
-                print(f"Found a model with {highest_similarity:.2f} similarity. Navigating to: {best_match_url}")
-                safe_driver_get(driver, best_match_url)
-                print(f"Current URL: {driver.current_url}")
-
-                # Wait for the final page to load and re-parse
-                WebDriverWait(driver, 10).until(EC.presence_of_element_located((By.TAG_NAME, "body")))
-                time.sleep(2)
-                page_source = driver.page_source
-                soup = BeautifulSoup(page_source, 'html.parser')
+            # Check for "You’re Almost There!" page
+            almost_there_h1 = soup.find('h1', string="You’re Almost There!")
+            if almost_there_h1:
+                print("Found 'You’re Almost There!' page, looking for matching variant links.")
+                # Find all assembly links
+                assembly_links = soup.find_all('a', href=re.compile(r'/store/parts/assembly/'))
+                prefix_len = int(len(model) * 0.6)
+                model_prefix = model.upper()[:prefix_len]
+                matching_link = None
+                for link in assembly_links:
+                    link_text = link.get_text(strip=True).upper()
+                    if link_text.startswith(model_prefix):
+                        matching_link = link
+                        break
+                if matching_link and matching_link.get('href'):
+                    variant_url = urljoin(driver.current_url, matching_link['href'])
+                    print(f"Using matching variant: {variant_url}")
+                    safe_driver_get(driver, variant_url)
+                    print(f"Navigated to variant: {driver.current_url}")
+                    # Wait and re-parse
+                    WebDriverWait(driver, 10).until(EC.presence_of_element_located((By.TAG_NAME, "body")))
+                    time.sleep(2)
+                    page_source = driver.page_source
+                    soup = BeautifulSoup(page_source, 'html.parser')
+                    # Now find Owner's Manual link on this page
+                    manual_link = soup.find('a', string=lambda text: text and text.strip() == "Owner's Manual")
+                    if manual_link and manual_link.get('href'):
+                        manual_url = urljoin(driver.current_url, manual_link['href'])
+                        print(f"Found Owner's Manual link on variant page: {manual_url}")
+                        safe_driver_get(driver, manual_url)
+                        print(f"Navigated to manual: {driver.current_url}")
+                        # Wait and re-parse
+                        WebDriverWait(driver, 10).until(EC.presence_of_element_located((By.TAG_NAME, "body")))
+                        time.sleep(2)
+                        page_source = driver.page_source
+                        soup = BeautifulSoup(page_source, 'html.parser')
+                    else:
+                        print("No Owner's Manual link found on variant page.")
+                else:
+                    print(f"No variant link found with prefix match for {model}.")
             else:
-                print("Could not find a sufficiently similar model link in search results.")
+                # Find the exact matching h3
+                h3 = soup.find('h3', string=lambda text: text and text.strip().upper() == model.upper())
+                if h3:
+                    print(f"Found exact h3: '{h3.get_text(strip=True)}'")
+                    parent = h3.find_parent('div')
+                    if parent:
+                        # Check for direct "Owner's Manual" link
+                        manual_link = parent.find('a', string=lambda text: text and text.strip() == "Owner's Manual")
+                        if manual_link and manual_link.get('href'):
+                            manual_url = urljoin(driver.current_url, manual_link['href'])
+                            print(f"Found direct Owner's Manual link: {manual_url}")
+                            safe_driver_get(driver, manual_url)
+                            print(f"Navigated to manual: {driver.current_url}")
+                            # Wait and re-parse
+                            WebDriverWait(driver, 10).until(EC.presence_of_element_located((By.TAG_NAME, "body")))
+                            time.sleep(2)
+                            page_source = driver.page_source
+                            soup = BeautifulSoup(page_source, 'html.parser')
+                        else:
+                            # Find first assembly link
+                            assembly_link = parent.find('a', href=re.compile(r'/store/parts/assembly/'))
+                            if assembly_link and assembly_link.get('href'):
+                                assembly_url = urljoin(driver.current_url, assembly_link['href'])
+                                print(f"Using first variant: {assembly_url}")
+                                safe_driver_get(driver, assembly_url)
+                                print(f"Navigated to variant: {driver.current_url}")
+                                # Wait and re-parse
+                                WebDriverWait(driver, 10).until(EC.presence_of_element_located((By.TAG_NAME, "body")))
+                                time.sleep(2)
+                                page_source = driver.page_source
+                                soup = BeautifulSoup(page_source, 'html.parser')
+                                # Now find Owner's Manual link on this page
+                                manual_link = soup.find('a', string=lambda text: text and text.strip() == "Owner's Manual")
+                                if manual_link and manual_link.get('href'):
+                                    manual_url = urljoin(driver.current_url, manual_link['href'])
+                                    print(f"Found Owner's Manual link on variant page: {manual_url}")
+                                    safe_driver_get(driver, manual_url)
+                                    print(f"Navigated to manual: {driver.current_url}")
+                                    # Wait and re-parse
+                                    WebDriverWait(driver, 10).until(EC.presence_of_element_located((By.TAG_NAME, "body")))
+                                    time.sleep(2)
+                                    page_source = driver.page_source
+                                    soup = BeautifulSoup(page_source, 'html.parser')
+                                else:
+                                    print("No Owner's Manual link found on variant page.")
+                            else:
+                                print("No assembly link found in the h3 section.")
+                    else:
+                        print("No parent div found for h3.")
+                else:
+                    print(f"No exact h3 match found for {model}.")
 
 
         # Find all PDF links

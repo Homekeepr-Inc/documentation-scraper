@@ -29,13 +29,17 @@ The link text contains the document type (e.g., "Owner's Manual").
 
 5.  **Keyword Search (Fallback)**: If an error page is detected, construct a search URL like `https://www.geapplianceparts.com/store/parts/KeywordSearch?q={MODEL}` and navigate to it.
 
-6.  **Model Link Extraction**: On the search results page, find an `<a>` tag whose text exactly matches the model number (using a case-insensitive regex like `^{MODEL}$`).
+6.  **Cookie Handling**: Handle cookie consent popup if present (click elements to accept).
 
-7.  **Specific Model Navigation**: If a matching link is found, extract its `href` attribute, construct the full URL, and navigate to it.
+7.  **"You’re Almost There!" Check**: Check for an `<h1>` element containing "You’re Almost There!". If found, find all `<a>` tags with `href` containing `/store/parts/assembly/`, and select the first one whose link text starts with the first 60% of the model number (case-insensitive). Navigate to that URL.
 
-8.  **PDF Link Extraction**: On the final model page, find all `<a>` tags with an `href` ending in `.pdf`. Extract the title from the link text and determine the `doc_type` based on keywords (e.g., "install" → "installation", "service" → "service", else "owner").
+8.  **Exact H3 Match (Fallback)**: If no "You’re Almost There!" h1, find an `<h3>` element whose text exactly matches the model number (case-insensitive). In its parent `<div>`, check for an `<a>` with text "Owner's Manual". If found, navigate to its `href`. Otherwise, find the first `<a>` with `href` containing `/store/parts/assembly/`, navigate to it.
 
-9.  **Data Collection**: For each PDF found, collect the following metadata:
+9.  **Manual Link Navigation**: On the navigated page, find an `<a>` with text "Owner's Manual" and navigate to its `href`.
+
+10. **PDF Link Extraction**: On the final page, find all `<a>` tags with an `href` ending in `.pdf`. Extract the title from the link text and determine the `doc_type` based on keywords (e.g., "install" → "installation", "service" → "service", else "owner").
+
+11. **Data Collection**: For each PDF found, collect the following metadata:
     *   `brand`: "ge"
     *   `model_number`: The model number provided.
     *   `doc_type`: The type inferred from the title.
@@ -43,7 +47,7 @@ The link text contains the document type (e.g., "Owner's Manual").
     *   `source_url`: The URL of the page where the PDF was found.
     *   `file_url`: The absolute URL of the PDF file.
 
-10. **Ingestion**: Pass the collected data to the ingestion function, which checks for duplicates by `file_url` and SHA256 hash before storing the document and its metadata.
+12. **Ingestion**: Pass the collected data to the ingestion function, which checks for duplicates by `file_url` and SHA256 hash before storing the document and its metadata.
 
 ## Implementations
 
@@ -77,7 +81,7 @@ It will fetch the page, extract the PDF, and ingest it into the database.
 
 ## Example Model Numbers
 curl -H "X-Homekeepr-Scraper: $SCRAPER_SECRET" http://localhost:8000/scrape/ge/GNE27JYMKFFS &
-curl -H "X-Homekeepr-Scraper: $SCRAPER_SECRET" http://localhost:8000/scrape/ge/GNE27JMMKES &
+curl -H "X-Homekeepr-Scraper: $SCRAPER_SECRET" http://localhost:8000/scrape/ge/GNE27JYMFS &
 curl -H "X-Homekeepr-Scraper: $SCRAPER_SECRET" http://localhost:8000/scrape/ge/GNE27JSMWSS &
 curl -H "X-Homekeepr-Scraper: $SCRAPER_SECRET" http://localhost:8000/scrape/ge/GFE26JYMFS &
 curl -H "X-Homekeepr-Scraper: $SCRAPER_SECRET" http://localhost:8000/scrape/ge/PVD28BYNFS &
