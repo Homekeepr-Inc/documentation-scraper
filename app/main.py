@@ -13,11 +13,11 @@ from .db import init_db, fetch_document, search_documents
 # Add path for headless scraper
 sys.path.append(os.path.join(os.path.dirname(__file__), '..', 'headless-browser-scraper'))
 from parallelism import enqueue_scrape_job, get_job_result, is_job_complete
-from ge_headless_scraper import ingest_ge_manual
-from lg_scraper import ingest_lg_manual
-from kitchenaid_headless_scraper import ingest_kitchenaid_manual
-from whirlpool_headless_scraper import ingest_whirlpool_manual
-from samsung_headless_scraper import ingest_samsung_manual
+from ge.ge_headless_scraper import ingest_ge_manual
+from lg.lg_scraper import ingest_lg_manual
+from kitchenaid.kitchenaid_headless_scraper import ingest_kitchenaid_manual
+from whirlpool.whirlpool_headless_scraper import ingest_whirlpool_manual
+from samsung.samsung_headless_scraper import ingest_samsung_manual
 
 templates = Jinja2Templates(directory="app/templates")
 
