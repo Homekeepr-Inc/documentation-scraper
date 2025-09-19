@@ -25,7 +25,7 @@ import requests
 
 # Import utility functions
 sys.path.append(os.path.dirname(__file__))
-from utils import safe_driver_get
+from utils import safe_driver_get, validate_and_ingest_manual
 
 # Add project root to sys.path
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
@@ -221,8 +221,8 @@ def scrape_whirlpool_manual(model):
         driver.quit()
 
 def ingest_whirlpool_manual(result):
-    from utils import ingest_manual
-    return ingest_manual(result)
+    from utils import validate_and_ingest_manual
+    return validate_and_ingest_manual(result)
 
 
 def main():

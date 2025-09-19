@@ -32,7 +32,7 @@ sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
 from app.config import DEFAULT_BLOB_ROOT
 
 # Import utility functions
-from utils import safe_driver_get, wait_for_download, validate_pdf_file
+from utils import safe_driver_get, wait_for_download, validate_pdf_file, validate_and_ingest_manual
 
 
 # Was having issues re-using the main Selenium driver during fallbacks, so we create a new one here.
@@ -260,8 +260,8 @@ def download_file(url, filename):
 
 
 def ingest_samsung_manual(result):
-    from utils import ingest_manual
-    return ingest_manual(result)
+    from utils import validate_and_ingest_manual
+    return validate_and_ingest_manual(result)
 
 
 def main():

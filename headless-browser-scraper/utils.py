@@ -126,6 +126,38 @@ def validate_pdf_file(file_path):
         return False
 
 
+def validate_pdf_content(file_path, model):
+    """
+    Validate that the PDF content contains the model number.
+
+    Args:
+        file_path (str): Path to the PDF file
+        model (str): Model number to check for
+
+    Returns:
+        bool: True if model is found in PDF text, False otherwise
+    """
+    try:
+        from pypdf import PdfReader
+        import io
+
+        with open(file_path, 'rb') as f:
+            pdf_bytes = f.read()
+
+        reader = PdfReader(io.BytesIO(pdf_bytes))
+        text = ""
+        for page in reader.pages:
+            text += page.extract_text() or ""
+            if len(text) > 10000:  # Limit to first 10k chars
+                break
+
+        # Check if model is in text (case insensitive)
+        return model.lower() in text.lower()
+    except Exception as e:
+        print(f"Error validating PDF content {file_path}: {e}")
+        return False
+
+
 def wait_for_download(download_dir, timeout=30):
     """
     Wait for a PDF download to complete in the specified directory.
@@ -151,22 +183,40 @@ def wait_for_download(download_dir, timeout=30):
     return None
 
 
-def ingest_manual(result):
+def validate_and_ingest_manual(result, validate_content=True):
     """
-    Generic function to ingest a scraped manual result into the database.
+    Validate and ingest a scraped manual result into the database.
+
+    Performs PDF validation and optionally content validation against the model number.
 
     Args:
         result (dict): Scraped result containing brand, model_number, doc_type, title, source_url, file_url
                        Optionally local_path if downloaded locally.
+        validate_content (bool): Whether to validate that PDF content contains the model number
 
     Returns:
-        IngestResult: Result of the ingestion
+        IngestResult: Result of the ingestion, or None if validation fails
     """
     if not result:
         return None
+
+    local_path = result.get('local_path')
+    model = result['model_number']
+
+    if local_path:
+        # Validate PDF file
+        if not validate_pdf_file(local_path):
+            print(f"Invalid PDF file: {local_path}")
+            return None
+
+        # Validate content if requested
+        if validate_content and not validate_pdf_content(local_path, model):
+            print(f"PDF content does not contain model {model}: {local_path}")
+            return None
+
     # Import here to avoid circular imports
     from app.ingest import ingest_from_local_path, ingest_from_url
-    if 'local_path' in result:
+    if local_path:
         return ingest_from_local_path(
             brand=result['brand'],
             model_number=result['model_number'],
@@ -185,3 +235,19 @@ def ingest_manual(result):
             source_url=result['source_url'],
             file_url=result['file_url']
         )
+
+
+def ingest_manual(result):
+    """
+    Generic function to ingest a scraped manual result into the database.
+    DEPRECATED: Use validate_and_ingest_manual instead for better validation.
+
+    Args:
+        result (dict): Scraped result containing brand, model_number, doc_type, title, source_url, file_url
+                       Optionally local_path if downloaded locally.
+
+    Returns:
+        IngestResult: Result of the ingestion
+    """
+    print("WARNING: ingest_manual is deprecated. Use validate_and_ingest_manual instead.")
+    return validate_and_ingest_manual(result, validate_content=False)

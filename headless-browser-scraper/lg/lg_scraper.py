@@ -31,7 +31,7 @@ from app.config import DEFAULT_BLOB_ROOT
 
 # Import utility functions
 sys.path.append(os.path.join(os.path.dirname(__file__)))
-from utils import duckduckgo_fallback, validate_pdf_file, wait_for_download, safe_driver_get
+from utils import duckduckgo_fallback, validate_pdf_file, wait_for_download, safe_driver_get, validate_and_ingest_manual
 
 
 
@@ -167,7 +167,7 @@ def scrape_lg_manual(model):
 
     # Launch undetected Chrome
     options = uc.ChromeOptions()
-    # options.add_argument('--headless')
+    options.add_argument('--headless')
     options.add_argument('--disable-dev-shm-usage')
     options.add_argument('--disable-gpu')
     options.add_argument('--window-size=1920,1080')
@@ -430,8 +430,8 @@ def download_file(url, filename):
         print(f"Error downloading {url}: {e}")
 
 def ingest_lg_manual(result):
-    from utils import ingest_manual
-    return ingest_manual(result)
+    from utils import validate_and_ingest_manual
+    return validate_and_ingest_manual(result)
 def main():
     if len(sys.argv) < 2:
         print("Usage: python3 lg_scraper.py <model_number>")

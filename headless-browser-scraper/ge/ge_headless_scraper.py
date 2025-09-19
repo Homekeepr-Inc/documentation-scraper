@@ -24,7 +24,7 @@ from selenium.webdriver.support import expected_conditions as EC
 import os
 import sys
 sys.path.append(os.path.dirname(__file__))
-from utils import safe_driver_get
+from utils import safe_driver_get, validate_and_ingest_manual
 from bs4 import BeautifulSoup, Tag
 import requests
 from difflib import SequenceMatcher
@@ -179,8 +179,8 @@ def download_file(url, filename):
 
 
 def ingest_ge_manual(result):
-    from utils import ingest_manual
-    return ingest_manual(result)
+    from utils import validate_and_ingest_manual
+    return validate_and_ingest_manual(result)
 
 
 def main():

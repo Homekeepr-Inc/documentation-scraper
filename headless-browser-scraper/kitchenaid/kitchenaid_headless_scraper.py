@@ -27,7 +27,7 @@ import requests
 
 # Import utility functions
 sys.path.append(os.path.dirname(__file__))
-from utils import safe_driver_get
+from utils import safe_driver_get, validate_and_ingest_manual
 
 # Import config for BLOB_ROOT
 from app.config import DEFAULT_BLOB_ROOT
@@ -243,8 +243,8 @@ def download_file(url, filename):
 
 
 def ingest_kitchenaid_manual(result):
-    from utils import ingest_manual
-    return ingest_manual(result)
+    from utils import validate_and_ingest_manual
+    return validate_and_ingest_manual(result)
 
 
 def main():

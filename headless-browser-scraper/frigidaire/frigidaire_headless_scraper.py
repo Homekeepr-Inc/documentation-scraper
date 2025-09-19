@@ -32,7 +32,7 @@ from app.config import DEFAULT_BLOB_ROOT
 
 # Import utility functions
 sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
-from utils import duckduckgo_fallback, validate_pdf_file, wait_for_download, safe_driver_get, ingest_manual
+from utils import duckduckgo_fallback, validate_pdf_file, wait_for_download, safe_driver_get, validate_and_ingest_manual
 
 
 def scrape_from_frigidaire_page(driver, model):
@@ -423,7 +423,7 @@ def download_file(url, filename):
 
 
 def ingest_frigidaire_manual(result):
-    return ingest_manual(result)
+    return validate_and_ingest_manual(result)
 
 
 def main():
