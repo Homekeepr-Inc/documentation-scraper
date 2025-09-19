@@ -27,7 +27,7 @@ import requests
 
 # Import utility functions
 sys.path.append(os.path.dirname(__file__))
-from utils import safe_driver_get, validate_and_ingest_manual
+from utils import safe_driver_get, validate_and_ingest_manual, create_temp_download_dir, cleanup_temp_dir
 
 # Import config for BLOB_ROOT
 from app.config import DEFAULT_BLOB_ROOT
@@ -96,6 +96,7 @@ def scrape_from_page(driver, model, download_dir):
             'title': title,
             'source_url': driver.current_url,
             'file_url': pdf_path,
+            'local_path': pdf_path,
         }]
         return results
     else:
@@ -124,8 +125,8 @@ def scrape_kitchenaid_manual(model):
     options.add_argument('--user-agent=Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36')
 
     # Set download preferences
-    download_dir = os.path.abspath(DEFAULT_BLOB_ROOT)
-    os.makedirs(download_dir, exist_ok=True)
+    temp_dir = create_temp_download_dir()
+    download_dir = temp_dir
     options.add_experimental_option("prefs", {
         "download.default_directory": download_dir,
         "download.prompt_for_download": False,
@@ -244,7 +245,7 @@ def download_file(url, filename):
 
 def ingest_kitchenaid_manual(result):
     from utils import validate_and_ingest_manual
-    return validate_and_ingest_manual(result)
+    return validate_and_ingest_manual(result, False)
 
 
 def main():

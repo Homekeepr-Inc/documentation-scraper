@@ -31,27 +31,23 @@ from app.config import DEFAULT_BLOB_ROOT
 
 # Import utility functions
 sys.path.append(os.path.join(os.path.dirname(__file__)))
-from utils import duckduckgo_fallback, validate_pdf_file, wait_for_download, safe_driver_get, validate_and_ingest_manual
+from utils import duckduckgo_fallback, validate_pdf_file, wait_for_download, safe_driver_get, validate_and_ingest_manual, create_temp_download_dir, cleanup_temp_dir
 
 
 
 
-def scrape_from_lg_page(driver, model):
+def scrape_from_lg_page(driver, model, download_dir):
     """
     Scrape LG manual from an LG product page (used after DuckDuckGo fallback).
 
     Args:
         driver: Active Selenium WebDriver instance on an LG page
         model: The model number being scraped
+        download_dir: Directory to download PDFs to
 
     Returns:
         dict: Scraped data or None if not found
     """
-    download_dir = os.path.abspath(DEFAULT_BLOB_ROOT)
-    # Clean old PDFs
-    for f in os.listdir(download_dir):
-        if f.endswith('.pdf'):
-            os.remove(os.path.join(download_dir, f))
 
     try:
         # Perform recorded actions for lg- page
@@ -80,15 +76,8 @@ def scrape_from_lg_page(driver, model):
             button = WebDriverWait(driver, 5).until(
                 EC.element_to_be_clickable((By.CSS_SELECTOR, ".MuiPaper-root:nth-child(1) .MuiGrid-root:nth-child(2) > .MuiTypography-root:nth-child(1)"))
             )
-            print(f"Button tag: {button.tag_name}")
-            print(f"Button text: {button.text}")
-            print(f"Button href: {button.get_attribute('href')}")
-            print(f"Button onclick: {button.get_attribute('onclick')}")
             attrs = driver.execute_script("return Array.from(arguments[0].attributes).map(attr => ({name: attr.name, value: attr.value}))", button)
             data_attrs = [attr for attr in attrs if attr['name'].startswith('data')]
-            print(f"Button data attributes: {[attr['name'] for attr in data_attrs]}")
-            for attr in data_attrs:
-                print(f"  {attr['name']}: {attr['value']}")
             pdf_url = button.get_attribute('href')
             if pdf_url:
                 print(f"Got PDF URL from href: {pdf_url}")
@@ -142,6 +131,7 @@ def scrape_from_lg_page(driver, model):
                 'title': title,
                 'source_url': driver.current_url,
                 'file_url': pdf_url,
+                'local_path': pdf_url,
             }
         else:
             print("No valid PDF URL found after LG page scraping.")
@@ -174,12 +164,8 @@ def scrape_lg_manual(model):
     options.add_argument('--disable-popup-blocking')
     options.add_argument('--user-agent=Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36')
     # Set download preferences
-    download_dir = os.path.abspath(DEFAULT_BLOB_ROOT)
-    os.makedirs(download_dir, exist_ok=True)
-    # Clean old PDFs to avoid picking wrong file
-    for f in os.listdir(download_dir):
-        if f.endswith('.pdf'):
-            os.remove(os.path.join(download_dir, f))
+    temp_dir = create_temp_download_dir()
+    download_dir = temp_dir
     options.add_experimental_option("prefs", {
         "download.default_directory": download_dir,
         "download.prompt_for_download": False,
@@ -238,8 +224,6 @@ def scrape_lg_manual(model):
             print(f"Retry page title: {driver.title}")
             guide_error_retry = soup.find('div', class_='guide-error')
             print(f"Guide error after retry: {guide_error_retry is not None}")
-            # Debug: print first 1000 chars of page source
-            print(f"Page source (first 1000 chars): {page_source[:1000]}")
 
 
 
@@ -260,26 +244,19 @@ def scrape_lg_manual(model):
                 # Debug: print all manual items
                 manuals = driver.find_elements(By.CSS_SELECTOR, ".MuiPaper-root")
                 print(f"Found {len(manuals)} manual items:")
-                for i, manual in enumerate(manuals):
-                    print(f"Manual {i} text: {manual.text}")
+                # Removed loop prints for performance
             except Exception as e:
                 print(f"Error clicking tab: {e}")
                 # Fallback to DuckDuckGo search
-                return duckduckgo_fallback(driver, model, "lg.com/us", lambda d: scrape_from_lg_page(d, model))
+                return duckduckgo_fallback(driver, model, "lg.com/us", lambda d: scrape_from_lg_page(d, model, download_dir))
             # Get the PDF URL from the button
             try:
                 button = WebDriverWait(driver, 5).until(
                     EC.element_to_be_clickable((By.CSS_SELECTOR, ".MuiPaper-root:nth-child(1) .MuiGrid-root:nth-child(2) > .MuiTypography-root:nth-child(1)"))
                 )
-                print(f"Button tag: {button.tag_name}")
-                print(f"Button text: {button.text}")
-                print(f"Button href: {button.get_attribute('href')}")
-                print(f"Button onclick: {button.get_attribute('onclick')}")
                 attrs = driver.execute_script("return Array.from(arguments[0].attributes).map(attr => ({name: attr.name, value: attr.value}))", button)
                 data_attrs = [attr for attr in attrs if attr['name'].startswith('data')]
-                print(f"Button data attributes: {[attr['name'] for attr in data_attrs]}")
-                for attr in data_attrs:
-                    print(f"  {attr['name']}: {attr['value']}")
+                # Removed loop prints for performance
                 pdf_url = button.get_attribute('href')
                 if pdf_url:
                     print(f"Got PDF URL from href: {pdf_url}")
@@ -332,6 +309,7 @@ def scrape_lg_manual(model):
                     'title': title,
                     'source_url': url,
                     'file_url': pdf_url,
+                    'local_path': pdf_url,
                 }
             else:
                 print("No valid PDF URL found after click.")
@@ -397,14 +375,15 @@ def scrape_lg_manual(model):
                 print(f"Error validating PDF: {e}")
                 return None
 
-            return {
-                'brand': 'lg',
-                'model_number': model,
-                'doc_type': doc_type,
-                'title': title,
-                'source_url': url,
-                'file_url': pdf_url,
-            }
+                return {
+                    'brand': 'lg',
+                    'model_number': model,
+                    'doc_type': doc_type,
+                    'title': title,
+                    'source_url': url,
+                    'file_url': pdf_url,
+                    'local_path': pdf_url,
+                }
 
     except Exception as e:
         print(f"Error scraping {model}: {e}")
@@ -431,7 +410,9 @@ def download_file(url, filename):
 
 def ingest_lg_manual(result):
     from utils import validate_and_ingest_manual
-    return validate_and_ingest_manual(result)
+    # LG uses catch-all model names i.e "WKEX200H*A", and does not usually specify specific model names in their PDFs i.e "WKEX200HBA"
+    # Because of this, we don't validate the content of the PDF contains the model number provided in the request.
+    return validate_and_ingest_manual(result, False)
 def main():
     if len(sys.argv) < 2:
         print("Usage: python3 lg_scraper.py <model_number>")

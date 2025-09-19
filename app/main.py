@@ -1,6 +1,8 @@
 import sys
 import os
 import asyncio
+import tempfile
+import shutil
 from typing import Optional
 
 from fastapi import FastAPI, HTTPException, Request
@@ -183,6 +185,21 @@ async def scrape_brand_model(brand: str, model: str):
             raise HTTPException(status_code=500, detail="Failed to ingest")
     else:
         doc_id = ingest_result.id
+
+    # Clean up temp directory if it exists
+    if result and result.get('local_path'):
+        temp_dir = os.path.dirname(result['local_path'])
+        scraper_temp_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'headless-browser-scraper', 'temp'))
+        temp_dir = os.path.abspath(temp_dir)
+        if temp_dir and os.path.exists(temp_dir):
+            try:
+                # Use commonpath for reliable subdirectory check
+                common = os.path.commonpath([scraper_temp_dir, temp_dir])
+                if common == scraper_temp_dir:
+                    shutil.rmtree(temp_dir)
+                    print(f"Cleaned up temp dir: {temp_dir}")
+            except (ValueError, OSError) as e:
+                print(f"Error cleaning temp dir {temp_dir}: {e}")
 
     # Serve the file
     doc = await loop.run_in_executor(None, fetch_document, doc_id)

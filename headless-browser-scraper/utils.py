@@ -19,6 +19,8 @@ from selenium.webdriver.common.action_chains import ActionChains
 from selenium.common.exceptions import TimeoutException
 from bs4 import BeautifulSoup
 import requests
+import tempfile
+import shutil
 
 # Import config for BLOB_ROOT
 from app.config import DEFAULT_BLOB_ROOT
@@ -244,10 +246,37 @@ def ingest_manual(result):
 
     Args:
         result (dict): Scraped result containing brand, model_number, doc_type, title, source_url, file_url
-                       Optionally local_path if downloaded locally.
+                        Optionally local_path if downloaded locally.
 
     Returns:
         IngestResult: Result of the ingestion
     """
     print("WARNING: ingest_manual is deprecated. Use validate_and_ingest_manual instead.")
     return validate_and_ingest_manual(result, validate_content=False)
+
+
+def create_temp_download_dir():
+    """
+    Create a unique temporary directory for PDF downloads.
+
+    Returns:
+        str: Path to the temporary directory
+    """
+    # Create temp dir relative to the scraper directory
+    scraper_dir = os.path.dirname(__file__)
+    temp_base = os.path.join(scraper_dir, 'temp')
+    os.makedirs(temp_base, exist_ok=True)
+    return tempfile.mkdtemp(dir=temp_base)
+
+
+def cleanup_temp_dir(temp_dir):
+    """
+    Safely remove a temporary directory and its contents.
+
+    Args:
+        temp_dir (str): Path to the temporary directory to remove
+    """
+    try:
+        shutil.rmtree(temp_dir)
+    except Exception as e:
+        print(f"Error cleaning up temp dir {temp_dir}: {e}")

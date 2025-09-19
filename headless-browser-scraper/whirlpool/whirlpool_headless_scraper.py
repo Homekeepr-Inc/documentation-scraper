@@ -25,14 +25,14 @@ import requests
 
 # Import utility functions
 sys.path.append(os.path.dirname(__file__))
-from utils import safe_driver_get, validate_and_ingest_manual
+from utils import safe_driver_get, validate_and_ingest_manual, create_temp_download_dir, cleanup_temp_dir
 
 # Add project root to sys.path
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
 from app.config import DEFAULT_BLOB_ROOT
 
-def fallback_scrape(driver, model, search_url):
+def fallback_scrape(driver, model, search_url, download_dir):
     """
     Fallback scraping mechanism for Whirlpool manuals.
     """
@@ -62,7 +62,6 @@ def fallback_scrape(driver, model, search_url):
             file_url = urljoin(direct_url, file_url)
             print(f"Found manual link: {file_url}")
 
-            download_dir = os.path.abspath(DEFAULT_BLOB_ROOT)
             files_before = set(os.listdir(download_dir))
 
             # Scroll to element and use JavaScript click to avoid interception
@@ -131,8 +130,8 @@ def scrape_whirlpool_manual(model):
     options.add_argument('--user-agent=Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36')
 
     # Set download preferences
-    download_dir = os.path.abspath(DEFAULT_BLOB_ROOT)
-    os.makedirs(download_dir, exist_ok=True)
+    temp_dir = create_temp_download_dir()
+    download_dir = temp_dir
     options.add_experimental_option("prefs", {
         "download.default_directory": download_dir,
         "download.prompt_for_download": False,
@@ -172,7 +171,6 @@ def scrape_whirlpool_manual(model):
             file_url = urljoin(driver.current_url, file_url)
             print(f"Found Owner's Manual link: {file_url}")
 
-            download_dir = os.path.abspath(DEFAULT_BLOB_ROOT)
             files_before = set(os.listdir(download_dir))
 
             # Scroll to element and use JavaScript click to avoid interception
@@ -212,11 +210,11 @@ def scrape_whirlpool_manual(model):
 
         except Exception as e:
             print(f"Error finding or clicking Owner's Manual link: {e}")
-            return fallback_scrape(driver, model, search_url)
+            return fallback_scrape(driver, model, search_url, download_dir)
 
     except Exception as e:
         print(f"An error occurred while scraping for model {model}: {e}")
-        return fallback_scrape(driver, model, search_url)
+        return fallback_scrape(driver, model, search_url, download_dir)
     finally:
         driver.quit()
 

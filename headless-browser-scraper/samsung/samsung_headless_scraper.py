@@ -32,7 +32,7 @@ sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
 from app.config import DEFAULT_BLOB_ROOT
 
 # Import utility functions
-from utils import safe_driver_get, wait_for_download, validate_pdf_file, validate_and_ingest_manual
+from utils import safe_driver_get, wait_for_download, validate_pdf_file, validate_and_ingest_manual, create_temp_download_dir, cleanup_temp_dir
 
 
 # Was having issues re-using the main Selenium driver during fallbacks, so we create a new one here.
@@ -48,8 +48,8 @@ def fallback_scrape(model):
     options.add_argument('--user-agent=Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36')
 
     # Set download preferences
-    download_dir = os.path.abspath(DEFAULT_BLOB_ROOT)
-    os.makedirs(download_dir, exist_ok=True)
+    temp_dir = create_temp_download_dir()
+    download_dir = temp_dir
     options.add_experimental_option("prefs", {
         "download.default_directory": download_dir,
         "download.prompt_for_download": False,
@@ -95,7 +95,6 @@ def fallback_scrape(model):
         safe_driver_get(driver, pdf_url)
 
         # Wait for download to start
-        download_dir = os.path.abspath(DEFAULT_BLOB_ROOT)
         pdf_path = wait_for_download(download_dir, timeout=30)
 
         if pdf_path and validate_pdf_file(pdf_path):
@@ -144,8 +143,8 @@ def scrape_samsung_manual(model):
     options.add_argument('--user-agent=Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36')
 
     # Set download preferences
-    download_dir = os.path.abspath(DEFAULT_BLOB_ROOT)
-    os.makedirs(download_dir, exist_ok=True)
+    temp_dir = create_temp_download_dir()
+    download_dir = temp_dir
     options.add_experimental_option("prefs", {
         "download.default_directory": download_dir,
         "download.prompt_for_download": False,
