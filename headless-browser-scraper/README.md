@@ -27,6 +27,7 @@ We also don't have hard time requirements. Faster is better, but its okay if it 
 
 ## Conventions to Follow (Important!)
 To ensure timeliness and robustness, we have a few utility functions which should be used in certain circumstances:
+- Never using `print()` calls in loops as they can slow down execution by _many_ orders of magnitude. Progress `print()` calls are fine.
 - `safe_driver_get`: like driver.get in Selenium, but adds a 10s timeout to avoid stopping the world and blocking the queue.
   - **Always use this instead of driver.get to avoid blocking the queue!**
 - `wait_for_download`: polls the disk to ensure a file is fully downloaded before continuing i.e attempting to ingest file into sqlite via `ingest_manual`.

@@ -74,11 +74,11 @@ def scrape_from_frigidaire_page(driver, model):
         for selector in manual_selectors:
             try:
                 elements = soup.select(selector)
-                print(f"Fallback selector '{selector}' found {len(elements)} elements")
+                # print(f"Fallback selector '{selector}' found {len(elements)} elements")
                 for element in elements:
                     href = element.get('href')
                     text = element.get_text(strip=True)
-                    print(f"  Fallback element: {text} -> {href}")
+                    # print(f"  Fallback element: {text} -> {href}")
                     if href and '.pdf' in href.lower():
                         # Check if this is an owner's manual (prioritize these)
                         is_owners_manual = any(keyword in text.lower() or keyword in href.lower()
