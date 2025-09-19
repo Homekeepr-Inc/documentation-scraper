@@ -54,7 +54,6 @@ def scrape_from_frigidaire_page(driver, model):
         WebDriverWait(driver, 10).until(
             EC.presence_of_element_located((By.TAG_NAME, "body"))
         )
-        time.sleep(random.uniform(1.0, 2.0))
 
         # Get page source and parse
         page_source = driver.page_source
@@ -183,7 +182,6 @@ def scrape_frigidaire_manual(model):
         WebDriverWait(driver, 10).until(
             EC.presence_of_element_located((By.TAG_NAME, "body"))
         )
-        time.sleep(random.uniform(1.0, 2.0))
 
         print(f"Current URL after page load: {driver.current_url}")
         print(f"Looking for 'owner-center': {'owner-center' in driver.current_url}")
@@ -203,7 +201,7 @@ def scrape_frigidaire_manual(model):
             for i, link in enumerate(all_links[:20]):  # Show first 20 links
                 href = link.get('href')
                 text = link.get_text(strip=True)
-                print(f"  {i+1}. {text} -> {href}")
+                # print(f"  {i+1}. {text} -> {href}")
 
             # Look for the specific selectors based on the actual HTML structure
             manual_selectors = [
@@ -220,11 +218,9 @@ def scrape_frigidaire_manual(model):
             for selector in manual_selectors:
                 try:
                     elements = soup.select(selector)
-                    print(f"Selector '{selector}' found {len(elements)} elements")
                     for element in elements:
                         href = element.get('href')
                         text = element.get_text(strip=True)
-                        print(f"  Element: {text} -> {href}")
                         if href and '.pdf' in href.lower():
                             # Check if this is an owner's manual (prioritize these)
                             is_owners_manual = any(keyword in text.lower() or keyword in href.lower()
@@ -297,37 +293,31 @@ def scrape_frigidaire_manual(model):
         WebDriverWait(driver, 10).until(
             EC.presence_of_element_located((By.TAG_NAME, "body"))
         )
-        time.sleep(random.uniform(1.0, 2.0))
 
         # Click search input
         search_input = WebDriverWait(driver, 10).until(
             EC.element_to_be_clickable((By.CSS_SELECTOR, ".form-control"))
         )
         search_input.click()
-        time.sleep(random.uniform(0.5, 1.0))
 
         # Type model number
         search_input.clear()
         search_input.send_keys(model)
-        time.sleep(random.uniform(0.5, 1.0))
 
         # Click search button
         search_button = WebDriverWait(driver, 10).until(
             EC.element_to_be_clickable((By.CSS_SELECTOR, ".fa"))
         )
         search_button.click()
-        time.sleep(random.uniform(2.0, 3.0))
 
         # Mouse over "Register Your Product" to trigger any JS
         try:
             register_link = driver.find_element(By.LINK_TEXT, "Register Your Product")
             actions = ActionChains(driver)
             actions.move_to_element(register_link).perform()
-            time.sleep(random.uniform(0.5, 1.0))
             # Mouse out
             body = driver.find_element(By.TAG_NAME, "body")
             actions.move_to_element(body).perform()
-            time.sleep(random.uniform(0.5, 1.0))
         except Exception as e:
             print(f"Mouse over/out failed: {e}")
 
@@ -338,18 +328,14 @@ def scrape_frigidaire_manual(model):
             )
             # Use JavaScript click to avoid interception
             driver.execute_script("arguments[0].scrollIntoView();", product_image)
-            time.sleep(0.5)
             driver.execute_script("arguments[0].click();", product_image)
-            time.sleep(random.uniform(1.0, 2.0))
         except Exception as e:
             print(f"Error clicking product image: {e}")
             return None
 
         # Scroll a bit
         driver.execute_script("window.scrollTo(0,2)")
-        time.sleep(random.uniform(0.5, 1.0))
         driver.execute_script("window.scrollTo(0,816)")
-        time.sleep(random.uniform(0.5, 1.0))
 
         # Close modal if present
         try:
@@ -357,7 +343,6 @@ def scrape_frigidaire_manual(model):
                 EC.element_to_be_clickable((By.ID, "close-modal123"))
             )
             close_modal.click()
-            time.sleep(random.uniform(0.5, 1.0))
         except Exception as e:
             print(f"No modal to close or close failed: {e}")
 
@@ -371,14 +356,12 @@ def scrape_frigidaire_manual(model):
 
         # Click the link (opens in new window/tab)
         owners_guide_link.click()
-        time.sleep(random.uniform(1.0, 2.0))
 
         # Switch to new window
         new_handles = driver.window_handles
         if len(new_handles) > len(current_handles):
             new_window = set(new_handles).difference(set(current_handles)).pop()
             driver.switch_to.window(new_window)
-            time.sleep(random.uniform(1.0, 2.0))
 
             # Get the PDF URL from current page
             current_url = driver.current_url
