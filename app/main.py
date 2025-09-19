@@ -21,6 +21,9 @@ from samsung_headless_scraper import ingest_samsung_manual
 
 templates = Jinja2Templates(directory="app/templates")
 
+def normalize_model(model):
+    return model.replace('/', '_')
+
 app = FastAPI(title="Appliance Manuals API")
 
 # Custom header secret for API protection
@@ -126,10 +129,12 @@ async def scrape_brand_model(brand: str, model: str):
     if brand not in supported_brands:
         raise HTTPException(status_code=400, detail="Unsupported brand")
 
+    normalized_model = normalize_model(model)
+
     # Check DB for existing document
     loop = asyncio.get_event_loop()
     from .db import get_db
-    doc = await loop.run_in_executor(None, lambda: get_db().execute("SELECT id, local_path FROM documents WHERE brand = ? AND model_number = ? AND local_path IS NOT NULL LIMIT 1", (brand, model)).fetchone())
+    doc = await loop.run_in_executor(None, lambda: get_db().execute("SELECT id, local_path FROM documents WHERE brand = ? AND model_number = ? AND local_path IS NOT NULL LIMIT 1", (brand, normalized_model)).fetchone())
     if doc:
         return FileResponse(doc[1], media_type="application/pdf")
 

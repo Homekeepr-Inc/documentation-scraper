@@ -63,6 +63,7 @@ def fallback_scrape(model):
         print(f"Primary scraping failed for {model}, trying fallback...")
         # Check if model ends with "/AA" (case insensitive), strip it and add "-aa"
         original_model = model
+        normalized_model = model.replace('/', '_')
         if model.upper().endswith("/AA"):
             stripped_model = model[:-3]  # Strip "/AA"
             fallback_url = f"https://samsungparts.com/products/{stripped_model}-aa"
@@ -85,7 +86,6 @@ def fallback_scrape(model):
 
         owners_manual_link = driver.find_element(By.CSS_SELECTOR, ".bmpg-ownersManualLink a")
         pdf_url = owners_manual_link.get_attribute("href")
-        print(f"PDF URL: {pdf_url}")
         if not pdf_url or not isinstance(pdf_url, str) or not pdf_url.startswith('http'):
             print("Invalid or missing PDF URL")
             return None
@@ -102,7 +102,7 @@ def fallback_scrape(model):
             print(f"Downloaded and validated PDF from fallback: {pdf_path}")
             return {
                 'brand': 'samsung',
-                'model_number': stripped_model,
+                'model_number': normalized_model,
                 'doc_type': 'owner',
                 'title': title,
                 'source_url': driver.current_url,
@@ -130,11 +130,8 @@ def scrape_samsung_manual(model):
     Returns:
         dict: Scraped data or None if not found
     """
-    # Normalize model by stripping "/AA" if present
-    if model.upper().endswith("/AA"):
-        normalized_model = model[:-3]
-    else:
-        normalized_model = model
+    # Normalize model by replacing "/" with "_"
+    normalized_model = model.replace('/', '_')
 
     url = "https://www.samsung.com/latin_en/support/user-manuals-and-guide/"
 
@@ -216,7 +213,7 @@ def scrape_samsung_manual(model):
         # Get the download link
         download_link = driver.find_element(By.LINK_TEXT, "Download")
         file_url = download_link.get_attribute("href")
-        title = f"Samsung {normalized_model} manual"
+        title = f"Samsung {model} manual"
 
         # Click to download
         download_link.click()
