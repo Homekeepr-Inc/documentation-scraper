@@ -278,6 +278,11 @@ def scrape_frigidaire_manual(model):
                 }
 
             print("No manual links found on direct page")
+            # Try DuckDuckGo fallback before giving up
+            print("Attempting DuckDuckGo fallback...")
+            fallback_result = duckduckgo_fallback(driver, model, "frigidaire.com", lambda d: scrape_from_frigidaire_page(d, model))
+            if fallback_result:
+                return fallback_result
             return None
         else:
             print("Direct URL didn't work, trying original search approach...")
