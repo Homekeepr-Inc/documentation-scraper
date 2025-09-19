@@ -110,6 +110,9 @@ def worker():
             elif brand == 'samsung':
                 from samsung_headless_scraper import scrape_samsung_manual
                 result = scrape_samsung_manual(model)
+            elif brand == 'frigidaire':
+                from frigidaire.frigidaire_headless_scraper import scrape_frigidaire_manual
+                result = scrape_frigidaire_manual(model)
             else:
                 result = None  # Unknown brand
 
