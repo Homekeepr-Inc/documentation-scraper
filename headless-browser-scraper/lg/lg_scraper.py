@@ -48,6 +48,10 @@ def scrape_from_lg_page(driver, model):
         dict: Scraped data or None if not found
     """
     download_dir = os.path.abspath(DEFAULT_BLOB_ROOT)
+    # Clean old PDFs
+    for f in os.listdir(download_dir):
+        if f.endswith('.pdf'):
+            os.remove(os.path.join(download_dir, f))
 
     try:
         # Perform recorded actions for lg- page
@@ -163,7 +167,7 @@ def scrape_lg_manual(model):
 
     # Launch undetected Chrome
     options = uc.ChromeOptions()
-    options.add_argument('--headless')
+    # options.add_argument('--headless')
     options.add_argument('--disable-dev-shm-usage')
     options.add_argument('--disable-gpu')
     options.add_argument('--window-size=1920,1080')
@@ -172,6 +176,10 @@ def scrape_lg_manual(model):
     # Set download preferences
     download_dir = os.path.abspath(DEFAULT_BLOB_ROOT)
     os.makedirs(download_dir, exist_ok=True)
+    # Clean old PDFs to avoid picking wrong file
+    for f in os.listdir(download_dir):
+        if f.endswith('.pdf'):
+            os.remove(os.path.join(download_dir, f))
     options.add_experimental_option("prefs", {
         "download.default_directory": download_dir,
         "download.prompt_for_download": False,
@@ -249,6 +257,11 @@ def scrape_lg_manual(model):
                 tab.click()
                 print("Clicked manuals tab.")
                 time.sleep(random.uniform(0.03, 0.09))
+                # Debug: print all manual items
+                manuals = driver.find_elements(By.CSS_SELECTOR, ".MuiPaper-root")
+                print(f"Found {len(manuals)} manual items:")
+                for i, manual in enumerate(manuals):
+                    print(f"Manual {i} text: {manual.text}")
             except Exception as e:
                 print(f"Error clicking tab: {e}")
                 # Fallback to DuckDuckGo search
