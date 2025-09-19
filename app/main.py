@@ -12,7 +12,7 @@ from .db import init_db, fetch_document, search_documents
 
 # Add path for headless scraper
 sys.path.append(os.path.join(os.path.dirname(__file__), '..', 'headless-browser-scraper'))
-from parallelism import enqueue_scrape_job, get_job_result
+from parallelism import enqueue_scrape_job, get_job_result, is_job_complete
 from ge_headless_scraper import ingest_ge_manual
 from lg_scraper import ingest_lg_manual
 from kitchenaid_headless_scraper import ingest_kitchenaid_manual
@@ -119,7 +119,7 @@ def get_document_text(doc_id: int):
     raise HTTPException(status_code=404, detail="Text not available")
 
 
-@app.get("/scrape/{brand}/{model}")
+@app.get("/scrape/{brand}/{model:path}")
 async def scrape_brand_model(brand: str, model: str):
     brand = brand.lower()
     supported_brands = {'ge', 'lg', 'kitchenaid', 'whirlpool', 'samsung'}
@@ -137,11 +137,14 @@ async def scrape_brand_model(brand: str, model: str):
     job_id = enqueue_scrape_job(brand, model)
 
     # Wait for result
-    while True:
-        result = get_job_result(job_id)
-        if result is not None:
-            break
+    while not is_job_complete(job_id):
         await asyncio.sleep(0.5)
+
+    result = get_job_result(job_id)
+
+    if isinstance(result, Exception):
+        raise HTTPException(status_code=500, detail=f"Scraping failed: {result}")
+
 
     if not result:
         raise HTTPException(status_code=404, detail="No manual found")

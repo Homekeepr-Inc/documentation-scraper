@@ -60,6 +60,12 @@ def get_job_result(job_id: str) -> Optional[Any]:
         return job_results.get(job_id)
 
 
+def is_job_complete(job_id: str) -> bool:
+    """Check if a job has completed."""
+    with results_lock:
+        return job_id in job_results
+
+
 def set_job_result(job_id: str, result: Any):
     """
     Set the result for a completed job.
@@ -112,7 +118,7 @@ def worker():
 
         except Exception as e:
             print(f"Error in worker for job {job_id}: {e}")
-            set_job_result(job_id, None)
+            set_job_result(job_id, e)
         finally:
             browser_semaphore.release()
         job_queue.task_done()
