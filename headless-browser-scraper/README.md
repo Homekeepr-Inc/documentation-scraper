@@ -34,3 +34,11 @@ To ensure timeliness and robustness, we have a few utility functions which shoul
 - `duckduckgo_fallback`: if all scraper attempts fail, we have one final escape hatch to try and find the correct product page containing the desired manual. Note that this is a generic search for a particular model number, and is manufacturer-agnostic on purpose. Because of this, a brand-specific fallback function must be passed into `duckduckgo_fallback` to run if the duckduckgo fallback succeeds to find a page we support scraping for.
 - Every pdf must be saved to disk via `ingest_manual` after being validated by `validate_pdf_file`.
   - **Always do this!**
+- **Model Normalization for Caching**: When scraping models that may contain special characters (e.g., `/AA` in Samsung models), ensure the `model_number` in the returned dictionary is consistently normalized (e.g., replace `/` with `_`). The API lookup uses this normalized value, so mismatches will prevent caching. Always use the same normalization logic in both primary and fallback scrapers to avoid this recurring issue.
+- **Caching Failure Conditions**: Caching won't work if: 
+  - (1) No prior scrape exists
+  - (2) Model normalization mismatches
+  - (3) Ingestion fails or `local_path` is invalid/missing
+  - (4) Brand doesn't match
+  - (5) Scraper returns `None`
+  - (6) DB/query errors occur. Debug by checking DB for matching `brand`, `model_number`, and valid `local_path`.
