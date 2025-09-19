@@ -379,7 +379,7 @@ def download_file(url, filename):
 
 
 def ingest_frigidaire_manual(result):
-    return validate_and_ingest_manual(result)
+    return validate_and_ingest_manual(result, False)
 
 
 def main():

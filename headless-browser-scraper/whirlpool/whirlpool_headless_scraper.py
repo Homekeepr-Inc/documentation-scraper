@@ -220,7 +220,7 @@ def scrape_whirlpool_manual(model):
 
 def ingest_whirlpool_manual(result):
     from utils import validate_and_ingest_manual
-    return validate_and_ingest_manual(result)
+    return validate_and_ingest_manual(result, False)
 
 
 def main():
