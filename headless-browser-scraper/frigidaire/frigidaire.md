@@ -102,7 +102,7 @@ curl -H "X-Homekeepr-Scraper: $SCRAPER_SECRET" http://localhost:8000/scrape/frig
 curl -H "X-Homekeepr-Scraper: $SCRAPER_SECRET" http://localhost:8000/scrape/frigidaire/FCRE3052AS &
 curl -H "X-Homekeepr-Scraper: $SCRAPER_SECRET" http://localhost:8000/scrape/frigidaire/FCRG3052AS &
 curl -H "X-Homekeepr-Scraper: $SCRAPER_SECRET" http://localhost:8000/scrape/frigidaire/GCRI3058AF &
-curl -H "X-Homekeepr-Scraper: $SCRAPER_SECRET" http://localhost:8000/scrape/frigidaire/GCGE3060AF &
+curl -H "X-Homekeepr-Scraper: $SCRAPER_SECRET" http://localhost:8000/scrape/frigidaire/GCFE3060BF-A1 &
 curl -H "X-Homekeepr-Scraper: $SCRAPER_SECRET" http://localhost:8000/scrape/frigidaire/FGIH3047VF
 
 ### Dishwashers

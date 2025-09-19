@@ -35,12 +35,12 @@ sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
 from utils import duckduckgo_fallback, validate_pdf_file, wait_for_download, safe_driver_get, validate_and_ingest_manual
 
 
-def scrape_from_frigidaire_page(driver, model):
+def parse_manual_links(driver, model):
     """
-    Scrape Frigidaire manual from a Frigidaire product page (used after DuckDuckGo fallback).
+    Parse manual links from the current Frigidaire page.
 
     Args:
-        driver: Active Selenium WebDriver instance on a Frigidaire page
+        driver: Active Selenium WebDriver instance
         model: The model number being scraped
 
     Returns:
@@ -55,9 +55,30 @@ def scrape_from_frigidaire_page(driver, model):
             EC.presence_of_element_located((By.TAG_NAME, "body"))
         )
 
+        # Wait for manuals section to load
+        try:
+            WebDriverWait(driver, 10).until(
+                EC.presence_of_element_located((By.CSS_SELECTOR, ".manuals"))
+            )
+        except:
+            print("Manuals section not found, waiting additional time...")
+            time.sleep(5)
+
+        # Scroll to load lazy content
+        driver.execute_script("window.scrollTo(0, document.body.scrollHeight);")
+        time.sleep(2)
+
         # Get page source and parse
         page_source = driver.page_source
         soup = BeautifulSoup(page_source, 'html.parser')
+
+        # Debug: print all links on the page
+        all_links = soup.find_all('a', href=True)
+        print(f"Found {len(all_links)} links on the page:")
+        for i, link in enumerate(all_links[:20]):  # Show first 20 links
+            href = link.get('href')
+            text = link.get_text(strip=True)
+            print(f"  {i+1}. {text} -> {href}")
 
         # Look for the specific selectors based on the actual HTML structure
         manual_selectors = [
@@ -65,7 +86,8 @@ def scrape_from_frigidaire_page(driver, model):
             '.manuals a',     # Links within the manuals container
             'a[href*=".pdf"]', # Any PDF links
             'a[href*="guide"]', # Links containing "guide"
-            'a[href*="manual"]' # Links containing "manual"
+            'a[href*="manual"]', # Links containing "manual"
+            'a[href*="electroluxmedia.com"]'  # PDFs hosted on Electrolux media
         ]
 
         # Collect all potential owner's manuals
@@ -74,15 +96,14 @@ def scrape_from_frigidaire_page(driver, model):
         for selector in manual_selectors:
             try:
                 elements = soup.select(selector)
-                # print(f"Fallback selector '{selector}' found {len(elements)} elements")
+                print(f"Selector '{selector}' found {len(elements)} elements")
                 for element in elements:
                     href = element.get('href')
                     text = element.get_text(strip=True)
-                    # print(f"  Fallback element: {text} -> {href}")
                     if href and '.pdf' in href.lower():
                         # Check if this is an owner's manual (prioritize these)
                         is_owners_manual = any(keyword in text.lower() or keyword in href.lower()
-                                             for keyword in ['owner', 'complete owner', 'user guide', 'operating instructions'])
+                                              for keyword in ['owner', 'complete owner', 'user guide', 'operating instructions'])
 
                         pdf_url = urljoin(driver.current_url, href)
                         title = text or "Manual"
@@ -94,7 +115,7 @@ def scrape_from_frigidaire_page(driver, model):
                             'text': text
                         })
             except Exception as e:
-                print(f"Error with fallback selector {selector}: {e}")
+                print(f"Error with selector {selector}: {e}")
                 continue
 
         # Prioritize owner's manuals over other documents
@@ -107,7 +128,7 @@ def scrape_from_frigidaire_page(driver, model):
             pdf_url = selected_manual['url']
             title = selected_manual['title']
 
-            print(f"Selected manual in fallback: {title} -> {pdf_url}")
+            print(f"Selected manual: {title} -> {pdf_url}")
 
             # Download and validate PDF
             try:
@@ -135,7 +156,7 @@ def scrape_from_frigidaire_page(driver, model):
         return None
 
     except Exception as e:
-        print(f"Error scraping from Frigidaire page: {e}")
+        print(f"Error parsing manual links: {e}")
         return None
 
 
@@ -183,6 +204,19 @@ def scrape_frigidaire_manual(model):
             EC.presence_of_element_located((By.TAG_NAME, "body"))
         )
 
+        # Wait for manuals section to load
+        try:
+            WebDriverWait(driver, 10).until(
+                EC.presence_of_element_located((By.CSS_SELECTOR, ".manuals"))
+            )
+        except:
+            print("Manuals section not found, waiting additional time...")
+            time.sleep(5)
+
+        # Scroll to load lazy content
+        driver.execute_script("window.scrollTo(0, document.body.scrollHeight);")
+        time.sleep(2)
+
         print(f"Current URL after page load: {driver.current_url}")
         print(f"Looking for 'owner-center': {'owner-center' in driver.current_url}")
         print(f"Looking for model '{model}': {model in driver.current_url}")
@@ -191,92 +225,14 @@ def scrape_frigidaire_manual(model):
         if model in driver.current_url:
             print("Direct URL worked (found model in URL), looking for manual links...")
 
-            # Look for PDF links on the page
-            page_source = driver.page_source
-            soup = BeautifulSoup(page_source, 'html.parser')
-
-            # Debug: print all links on the page
-            all_links = soup.find_all('a', href=True)
-            print(f"Found {len(all_links)} links on the page:")
-            for i, link in enumerate(all_links[:20]):  # Show first 20 links
-                href = link.get('href')
-                text = link.get_text(strip=True)
-                # print(f"  {i+1}. {text} -> {href}")
-
-            # Look for the specific selectors based on the actual HTML structure
-            manual_selectors = [
-                '.mannual-name',  # The actual class used on the manual links
-                '.manuals a',     # Links within the manuals container
-                'a[href*=".pdf"]', # Any PDF links
-                'a[href*="guide"]', # Links containing "guide"
-                'a[href*="manual"]' # Links containing "manual"
-            ]
-
-            # Collect all potential owner's manuals
-            owners_manuals = []
-
-            for selector in manual_selectors:
-                try:
-                    elements = soup.select(selector)
-                    for element in elements:
-                        href = element.get('href')
-                        text = element.get_text(strip=True)
-                        if href and '.pdf' in href.lower():
-                            # Check if this is an owner's manual (prioritize these)
-                            is_owners_manual = any(keyword in text.lower() or keyword in href.lower()
-                                                 for keyword in ['owner', 'complete owner', 'user guide', 'operating instructions'])
-
-                            pdf_url = urljoin(driver.current_url, href)
-                            title = text or "Manual"
-
-                            owners_manuals.append({
-                                'url': pdf_url,
-                                'title': title,
-                                'is_owners_manual': is_owners_manual,
-                                'text': text
-                            })
-                except Exception as e:
-                    print(f"Error with selector {selector}: {e}")
-                    continue
-
-            # Prioritize owner's manuals over other documents
-            if owners_manuals:
-                # Sort by priority: owner's manuals first, then by title
-                owners_manuals.sort(key=lambda x: (not x['is_owners_manual'], x['title']))
-
-                # Take the highest priority manual
-                selected_manual = owners_manuals[0]
-                pdf_url = selected_manual['url']
-                title = selected_manual['title']
-
-                print(f"Selected manual: {title} -> {pdf_url}")
-
-                # Download and validate PDF
-                try:
-                    response = requests.get(pdf_url, allow_redirects=True)
-                    response.raise_for_status()
-                    content = response.content
-                    if not content.startswith(b'%PDF-'):
-                        print(f"File is not a PDF. First bytes: {content[:10]}")
-                        return None
-                    print("Validated as PDF.")
-                except Exception as e:
-                    print(f"Error validating PDF: {e}")
-                    return None
-
-                return {
-                    'brand': 'frigidaire',
-                    'model_number': model,
-                    'doc_type': 'owner',
-                    'title': title,
-                    'source_url': driver.current_url,
-                    'file_url': pdf_url,
-                }
+            result = parse_manual_links(driver, model)
+            if result:
+                return result
 
             print("No manual links found on direct page")
             # Try DuckDuckGo fallback before giving up
             print("Attempting DuckDuckGo fallback...")
-            fallback_result = duckduckgo_fallback(driver, model, "frigidaire.com", lambda d: scrape_from_frigidaire_page(d, model))
+            fallback_result = duckduckgo_fallback(driver, model, "frigidaire.com", lambda d: parse_manual_links(d, model))
             if fallback_result:
                 return fallback_result
             return None
@@ -403,7 +359,7 @@ def scrape_frigidaire_manual(model):
     except Exception as e:
         print(f"Direct URL approach failed for {model}: {e}")
         # Try DuckDuckGo fallback
-        return duckduckgo_fallback(driver, model, "frigidaire.com", lambda d: scrape_from_frigidaire_page(d, model))
+        return duckduckgo_fallback(driver, model, "frigidaire.com", lambda d: parse_manual_links(d, model))
 
     finally:
         driver.quit()
