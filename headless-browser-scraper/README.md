@@ -25,6 +25,17 @@ We also don't have hard time requirements. Faster is better, but its okay if it 
 - Individual scraper modules (e.g., `lg_scraper.py`, `ge_headless_scraper.py`) contain brand-specific scraping logic.
 - API endpoints in `app/main.py` enqueue jobs via `parallelism.py` instead of direct scraping.
 
+## Temp Directory Management
+To prevent race conditions between concurrent scraping jobs, each scraper uses isolated per-job temp directories:
+
+- **Per-Job Isolation**: Each scraping job creates its own temp directory under `headless-browser-scraper/temp/` using `create_temp_download_dir()`
+- **Download Process**: PDFs are downloaded to the job's temp directory, validated, then moved to permanent storage via `ingest_from_local_path()`
+- **Cleanup Timing**: Temp directories are cleaned up at the API level in `app/main.py` after successful ingestion using `cleanup_temp_dir()`
+- **Path Validation**: Uses `os.path.commonpath()` to ensure only temp directories within the expected base path are cleaned up
+- **Race Condition Prevention**: Eliminates conflicts when multiple jobs download PDFs with similar filenames simultaneously
+
+This approach ensures reliable cleanup while preventing premature deletion of files still being processed by other jobs.
+
 ## Conventions to Follow (Important!)
 To ensure timeliness and robustness, we have a few utility functions which should be used in certain circumstances:
 - Never using `print()` calls in loops as they can slow down execution by _many_ orders of magnitude. Progress `print()` calls are fine.

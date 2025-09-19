@@ -245,6 +245,8 @@ def download_file(url, filename):
 
 def ingest_kitchenaid_manual(result):
     from utils import validate_and_ingest_manual
+    # KitchenAid  does not usually specify specific model names in their PDFs.
+    # Because of this, we don't validate the content of the PDF contains the model number provided in the request as it will usually fail.
     return validate_and_ingest_manual(result, False)
 
 

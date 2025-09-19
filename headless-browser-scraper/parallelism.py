@@ -99,16 +99,16 @@ def worker():
                 from lg_scraper import scrape_lg_manual
                 result = scrape_lg_manual(model)
             elif brand == 'ge':
-                from ge_headless_scraper import scrape_ge_manual
+                from ge.ge_headless_scraper import scrape_ge_manual
                 result = scrape_ge_manual(model)
             elif brand == 'whirlpool':
-                from whirlpool_headless_scraper import scrape_whirlpool_manual
+                from whirlpool.whirlpool_headless_scraper import scrape_whirlpool_manual
                 result = scrape_whirlpool_manual(model)
             elif brand == 'kitchenaid':
-                from kitchenaid_headless_scraper import scrape_kitchenaid_manual
+                from kitchenaid.kitchenaid_headless_scraper import scrape_kitchenaid_manual
                 result = scrape_kitchenaid_manual(model)
             elif brand == 'samsung':
-                from samsung_headless_scraper import scrape_samsung_manual
+                from samsung.samsung_headless_scraper import scrape_samsung_manual
                 result = scrape_samsung_manual(model)
             elif brand == 'frigidaire':
                 from frigidaire.frigidaire_headless_scraper import scrape_frigidaire_manual

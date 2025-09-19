@@ -61,14 +61,18 @@ def fallback_scrape(model):
 
     try:
         print(f"Primary scraping failed for {model}, trying fallback...")
-        # Check if model ends with "/AA" (case insensitive), strip it and add "-aa"
+        # Check if model has "/XX" suffix, strip it and add "-xx"
         original_model = model
         normalized_model = model.replace('/', '_')
-        if model.upper().endswith("/AA"):
-            stripped_model = model[:-3]  # Strip "/AA"
-            fallback_url = f"https://samsungparts.com/products/{stripped_model}-aa"
+        if '/' in model:
+            parts = model.split('/')
+            if len(parts) == 2 and len(parts[1]) == 2:
+                stripped_model = parts[0]
+                suffix = parts[1].lower()
+                fallback_url = f"https://samsungparts.com/products/{stripped_model}-{suffix}"
+            else:
+                fallback_url = f"https://samsungparts.com/products/{model}"
         else:
-            stripped_model = model
             fallback_url = f"https://samsungparts.com/products/{model}"
         safe_driver_get(driver, fallback_url)
         print(f"Navigated to fallback URL: {fallback_url}")
@@ -132,6 +136,14 @@ def scrape_samsung_manual(model):
     # Normalize model by replacing "/" with "_"
     normalized_model = model.replace('/', '_')
 
+    # Prepare search term and model code
+    if '/' in model:
+        search_term = model.split('/')[0]
+        model_code = model.replace('/', '').upper()
+    else:
+        search_term = model
+        model_code = model
+
     url = "https://www.samsung.com/latin_en/support/user-manuals-and-guide/"
 
     # Launch undetected Chrome
@@ -175,7 +187,7 @@ def scrape_samsung_manual(model):
             EC.element_to_be_clickable((By.ID, "sud13-code-search-input"))
         )
         input_field.click()
-        input_field.send_keys(normalized_model)
+        input_field.send_keys(search_term)
 
         # Find submit button
         submit_button = WebDriverWait(driver, 20).until(
@@ -183,13 +195,29 @@ def scrape_samsung_manual(model):
         )
         submit_button.click()
 
-        # Wait for search results
-        WebDriverWait(driver, 10).until(
-            EC.presence_of_element_located((By.CSS_SELECTOR, f'a[data-modelcode="{normalized_model}"]'))
-        )
+        # Wait for search results and try to find the model link
+        model_link = None
+        try:
+            WebDriverWait(driver, 10).until(
+                EC.presence_of_element_located((By.CSS_SELECTOR, f'a[data-modelcode="{model_code}"]'))
+            )
+            model_link = driver.find_element(By.CSS_SELECTOR, f'a[data-modelcode="{model_code}"]')
+        except:
+            # If not found, try with model without suffix
+            if '/' in model:
+                alt_model_code = model.split('/')[0]
+                try:
+                    WebDriverWait(driver, 5).until(
+                        EC.presence_of_element_located((By.CSS_SELECTOR, f'a[data-modelcode="{alt_model_code}"]'))
+                    )
+                    model_link = driver.find_element(By.CSS_SELECTOR, f'a[data-modelcode="{alt_model_code}"]')
+                except:
+                    pass
+
+        if model_link is None:
+            raise Exception("Model link not found with any attempted model code")
 
         # Click the model link
-        model_link = driver.find_element(By.CSS_SELECTOR, f'a[data-modelcode="{normalized_model}"]')
         model_link.click()
 
         # Wait for the model page to load
@@ -260,7 +288,9 @@ def download_file(url, filename):
 
 def ingest_samsung_manual(result):
     from utils import validate_and_ingest_manual
-    return validate_and_ingest_manual(result)
+    # Samsung does not usually specify specific model names in their PDFs.
+    # Because of this, we don't validate the content of the PDF contains the model number provided in the request as it will usually fail.
+    return validate_and_ingest_manual(result, False)
 
 
 def main():
