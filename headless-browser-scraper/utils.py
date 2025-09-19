@@ -66,7 +66,7 @@ def duckduckgo_fallback(driver, model, host_url, scrape_callback):
 
     try:
         # Navigate to DuckDuckGo search.
-        search_query = f"{model} owner's manual"
+        search_query = f"{model} owner's manual site:{host_url}"
         safe_driver_get(driver, f"https://duckduckgo.com/?q={search_query}")
         time.sleep(random.uniform(0.5, 1.0))
 
@@ -84,7 +84,7 @@ def duckduckgo_fallback(driver, model, host_url, scrape_callback):
         trusted_link = None
         for link in result_links:
             href = link.get_attribute('href')
-            if href and host_url in href:
+            if href and host_url and model.lower() in href.lower():
                 print(f"Found trusted link: {href}")
                 trusted_link = link
                 break
