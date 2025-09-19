@@ -184,8 +184,10 @@ def wait_for_download(download_dir, timeout=30):
 
     return None
 
-
-def validate_and_ingest_manual(result, validate_content=True):
+# validate_content is broken as most manufacturers do not inject the real model name into the pdf.
+# They usually just mention the model series name vs specific model numbers.
+# Because of that, validate_content is set to False by default.
+def validate_and_ingest_manual(result, validate_content=False):
     """
     Validate and ingest a scraped manual result into the database.
 
