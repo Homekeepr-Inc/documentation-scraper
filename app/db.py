@@ -27,13 +27,14 @@ def init_db() -> None:
     conn = get_db()
     cur = conn.cursor()
 
-    # Drop and recreate table to ensure schema is correct
-    cur.execute("DROP TABLE IF EXISTS documents_fts;")
-    cur.execute("DROP TABLE IF EXISTS documents;")
-
+    # file_sha256 is no longer UNIQUE as we can have multiple models that share the same
+    # PDF. If we left it as UNIQUE, we would not be able to cache previously fetched PDFs
+    # if they end up being assigned to multiple models.
+    # If you change file_sha256 TEXT to file_sha256 TEXT UNIQUE it will break the scraper 
+    # and every document will be scraped, even it its in the database.
     cur.execute(
         """
-        CREATE TABLE documents (
+        CREATE TABLE IF NOT EXISTS documents (
             id INTEGER PRIMARY KEY,
             brand TEXT,
             model_number TEXT,
@@ -45,7 +46,7 @@ def init_db() -> None:
             published_at TEXT,
             source_url TEXT,
             file_url TEXT,
-            file_sha256 TEXT UNIQUE,
+            file_sha256 TEXT,
             size_bytes INTEGER,
             pages INTEGER,
             ocr_applied INTEGER DEFAULT 0,
@@ -56,10 +57,15 @@ def init_db() -> None:
             text_path TEXT,
             text TEXT,
             ingested_at TEXT,
-            last_seen_at TEXT
+            last_seen_at TEXT,
+            -- Ensures that for a given brand and model, we only have one of each document type.
+            -- This is the primary guard against duplicate entries.
+            UNIQUE(brand, model_number, doc_type)
         );
         """
     )
+
+
 
     # Basic indexes
     cur.execute("CREATE INDEX IF NOT EXISTS idx_documents_brand ON documents(brand);")
@@ -67,7 +73,7 @@ def init_db() -> None:
     cur.execute("CREATE INDEX IF NOT EXISTS idx_documents_model ON documents(model_number);")
     cur.execute("CREATE INDEX IF NOT EXISTS idx_documents_equipment_category ON documents(equipment_category);")
     cur.execute("CREATE INDEX IF NOT EXISTS idx_documents_equipment_type ON documents(equipment_type);")
-    
+
     # Performance indexes for common queries
     cur.execute("CREATE INDEX IF NOT EXISTS idx_documents_composite ON documents(brand, equipment_category, doc_type);")
     cur.execute("CREATE INDEX IF NOT EXISTS idx_documents_english ON documents(english_present) WHERE english_present = 1;")

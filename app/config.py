@@ -6,10 +6,12 @@ import os
 from pathlib import Path
 
 # Storage Configuration
-DEFAULT_BLOB_ROOT = Path.home() / "home-manuals"
+# Get the project root directory (parent of app directory)
+PROJECT_ROOT = Path(__file__).parent.parent
+DEFAULT_BLOB_ROOT = PROJECT_ROOT / "data" / "storage"
 BLOB_ROOT = Path(os.environ.get("BLOB_ROOT", str(DEFAULT_BLOB_ROOT)))
 
-DEFAULT_DB_PATH = Path("./data/manuals.db")
+DEFAULT_DB_PATH = PROJECT_ROOT / "data" / "manuals.db"
 DB_PATH = Path(os.environ.get("DB_PATH", str(DEFAULT_DB_PATH)))
 
 # Crawler Configuration (optimized for speed)

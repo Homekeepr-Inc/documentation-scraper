@@ -169,6 +169,84 @@ def crawl_sitemaps():
     stats()
 
 
+def crawl_ge_headless(models="CFE28TSHFSS"):
+    """Crawl GE appliance parts using headless browser scraper."""
+    import os
+    import subprocess
+
+    model_list = [m.strip() for m in models.split(',')]
+
+    for model in model_list:
+        print(f"🌐 Starting headless GE scrape for model: {model}")
+
+        env = os.environ.copy()
+        env["PYTHONPATH"] = "."
+        cmd = [
+            "python3", "headless-browser-scraper/ge_headless_scraper.py", model
+        ]
+        try:
+            subprocess.run(cmd, env=env, check=False, timeout=300)  # 5 min timeout
+        except subprocess.TimeoutExpired:
+            print(f"⏱️ Headless GE scrape for {model} timed out")
+        except Exception as e:
+            print(f"❌ Headless GE scrape for {model} error: {e}")
+
+    print("\n✅ Headless GE scrape complete!")
+    stats()
+
+
+def crawl_whirlpool_headless(models="WRT311FZDW"):
+    """Crawl Whirlpool appliance manuals using headless browser scraper."""
+    import os
+    import subprocess
+
+    model_list = [m.strip() for m in models.split(',')]
+
+    for model in model_list:
+        print(f"🌐 Starting headless Whirlpool scrape for model: {model}")
+
+        env = os.environ.copy()
+        env["PYTHONPATH"] = "."
+        cmd = [
+            "python3", "headless-browser-scraper/whirlpool_headless_scraper.py", model
+        ]
+        try:
+            subprocess.run(cmd, env=env, check=False, timeout=300)  # 5 min timeout
+        except subprocess.TimeoutExpired:
+            print(f"⏱️ Headless Whirlpool scrape for {model} timed out")
+        except Exception as e:
+            print(f"❌ Headless Whirlpool scrape for {model} error: {e}")
+
+    print("\n✅ Headless Whirlpool scrape complete!")
+    stats()
+
+
+def crawl_kitchenaid_headless(models="KOES530PSS"):
+    """Crawl Kitchenaid appliance manuals using headless browser scraper."""
+    import os
+    import subprocess
+
+    model_list = [m.strip() for m in models.split(',')]
+
+    for model in model_list:
+        print(f"🌐 Starting headless Kitchenaid scrape for model: {model}")
+
+        env = os.environ.copy()
+        env["PYTHONPATH"] = "."
+        cmd = [
+            "python3", "headless-browser-scraper/kitchenaid_headless_scraper.py", model
+        ]
+        try:
+            subprocess.run(cmd, env=env, check=False, timeout=300)  # 5 min timeout
+        except subprocess.TimeoutExpired:
+            print(f"⏱️ Headless Kitchenaid scrape for {model} timed out")
+        except Exception as e:
+            print(f"❌ Headless Kitchenaid scrape for {model} error: {e}")
+
+    print("\n✅ Headless Kitchenaid scrape complete!")
+    stats()
+
+
 def crawl_targeted_doc_type(brand="whirlpool", doc_type="tech_sheet", limit=25):
     """Crawl IA for specific document types (installation, tech_sheet, wiring, spec)."""
     # Validate inputs
@@ -374,6 +452,9 @@ def main():
         print("  crawl-ia       - Crawl Internet Archive (brand, rows)")
         print("  bulk           - Large-scale multi-brand crawl")
         print("  sitemaps       - Crawl brand sitemaps for direct PDF access")
+        print("  headless-ge    - Crawl GE using headless browser (model)")
+        print("  headless-whirlpool - Crawl Whirlpool using headless browser (model)")
+        print("  headless-kitchenaid - Crawl Kitchenaid using headless browser (model)")
         print("  targeted       - Targeted document type crawling")
         print("  max-scale      - Run ALL crawlers for maximum dataset (recommended)")
         print("\nExamples:")
@@ -381,6 +462,9 @@ def main():
         print("  python3 scripts/cli.py max-scale")
         print("  python3 scripts/cli.py crawl-ia samsung 50")
         print("  python3 scripts/cli.py targeted whirlpool tech_sheet")
+        print("  python3 scripts/cli.py headless-ge CFE28TSHFSS")
+        print("  python3 scripts/cli.py headless-whirlpool WRT311FZDW")
+        print("  python3 scripts/cli.py headless-kitchenaid KOES530PSS")
         return
     
     cmd = sys.argv[1]
@@ -399,6 +483,15 @@ def main():
         bulk_crawl()
     elif cmd == "sitemaps":
         crawl_sitemaps()
+    elif cmd == "headless-ge":
+        models = sys.argv[2] if len(sys.argv) > 2 else "CFE28TSHFSS"
+        crawl_ge_headless(models)
+    elif cmd == "headless-whirlpool":
+        models = sys.argv[2] if len(sys.argv) > 2 else "WRT311FZDW"
+        crawl_whirlpool_headless(models)
+    elif cmd == "headless-kitchenaid":
+        models = sys.argv[2] if len(sys.argv) > 2 else "KOES530PSS"
+        crawl_kitchenaid_headless(models)
     elif cmd == "targeted":
         brand = sys.argv[2] if len(sys.argv) > 2 else "whirlpool"
         doc_type = sys.argv[3] if len(sys.argv) > 3 else "tech_sheet"

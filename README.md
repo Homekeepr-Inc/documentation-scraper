@@ -201,6 +201,33 @@ documents (
 - **Monitoring**: Per-source metrics, error rates, ingestion throughput
 - **Documentation**: OpenAPI specs with interactive docs
 
+## Per-Job Temp Directory Solution
+
+### Problem: PDF Cleaning Race Condition
+
+The headless scrapers download PDFs to a shared `/data/storage/` directory. Originally, each scraper cleaned all existing PDFs before downloading to prevent picking the wrong file. However, with parallel jobs (2 concurrent browsers), this caused race conditions:
+
+1. Job A downloads PDF → file exists in shared directory
+2. Job B starts → cleans ALL PDFs (including A's)
+3. Job A tries to process its file → `FileNotFoundError`
+
+### Solution: Isolated Temp Directories
+- **No Race Conditions**: Each job has its own directory
+- **Automatic Cleanup**: Temp dirs removed after processing
+- **Preserves Original Fix**: No wrong file picking (only new downloads present)
+- **Simple Implementation**: Minimal code changes
+- **Robust**: Works with any number of parallel jobs
+
+### Implementation Plan
+
+1. Modify `scrape_lg_manual()` and similar functions
+2. Replace shared download dir with per-job temp dir
+3. Update Chrome options to use temp dir
+4. Move validated files to final storage location
+5. Remove aggressive cleaning code
+
+This maintains the original protection against wrong file selection while eliminating parallel execution conflicts.
+
 ## Current Status
 
 - **Corpus size**: 25+ documents and growing (optimized for speed: 900-1,200 docs/hour)

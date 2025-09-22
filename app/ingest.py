@@ -7,8 +7,9 @@ from typing import Optional, Tuple
 
 import requests
 from langdetect import detect, DetectorFactory
-from pdfminer.high_level import extract_text as pdfminer_extract_text
-from pypdf import PdfReader
+
+# Switched from pdfminer due to >20 second performance difference https://github.com/microsoft/markitdown/issues/1276
+from pypdf import PdfReader 
 
 from . import db
 from .storage import paths_for
@@ -33,11 +34,16 @@ def _sha256_bytes(data: bytes) -> str:
 
 
 def _extract_text_and_pages(pdf_bytes: bytes) -> Tuple[str, int]:
-    text = pdfminer_extract_text(io.BytesIO(pdf_bytes)) or ""
     try:
         reader = PdfReader(io.BytesIO(pdf_bytes))
         pages = len(reader.pages)
+        text = ""
+        for page in reader.pages:
+            text += page.extract_text() or ""
+            if len(text) > 10000:  # Limit text extraction to first ~10k chars for speed
+                break
     except Exception:
+        text = ""
         pages = 0
     return text, pages
 
@@ -52,26 +58,88 @@ def _english_present(text: str) -> bool:
     except Exception:
         return False
 
-
-def ingest_from_url(brand: str, model_number: str, doc_type: str, title: str, source_url: str, file_url: str, equipment_category: str = "appliance", equipment_type: str = "unknown") -> IngestResult:
-    # Speed optimization: Check if we already have this URL
-    existing = db.get_db().execute("SELECT file_sha256, pages, size_bytes, english_present FROM documents WHERE file_url = ?", (file_url,)).fetchone()
+# Added to distinguish between ingesting from a web url and from disk as they are different workflows.
+def ingest_from_local_path(brand: str, model_number: str, doc_type: str, title: str, source_url: str, file_url: str, local_path: str, equipment_category: str = "appliance", equipment_type: str = "unknown") -> IngestResult:
+    # Check if we already have this document (by brand, model, doc_type)
+    existing = db.get_db().execute("SELECT id, file_sha256, pages, size_bytes, english_present FROM documents WHERE brand = ? AND model_number = ? AND doc_type = ?", (brand.lower(), model_number, doc_type)).fetchone()
     if existing:
-        logger.info(f"Skipping duplicate URL: {file_url}")
-        return IngestResult(id=None, sha256=existing[0], pages=existing[1], size_bytes=existing[2], english_present=bool(existing[3]))
+        logger.info(f"Skipping duplicate document: {brand} {model_number} {doc_type}")
+        return IngestResult(id=existing[0], sha256=existing[1], pages=existing[2], size_bytes=existing[3], english_present=bool(existing[4]))
     
-    logger.info(f"Downloading PDF: {file_url}")
-    resp = requests.get(file_url, timeout=15)  # Reduced timeout
-    resp.raise_for_status()
-    pdf_bytes = resp.content
+    logger.info(f"Ingesting PDF from local path: {local_path}")
+    with open(local_path, 'rb') as f:
+        pdf_bytes = f.read()
+    
     size_bytes = len(pdf_bytes)
     sha = _sha256_bytes(pdf_bytes)
     
-    # Speed optimization: Check if we already have this file by SHA256
-    existing_by_hash = db.get_db().execute("SELECT id, pages, english_present FROM documents WHERE file_sha256 = ?", (sha,)).fetchone()
-    if existing_by_hash:
-        logger.info(f"Skipping duplicate file (SHA256): {sha[:8]}...")
-        return IngestResult(id=existing_by_hash[0], sha256=sha, pages=existing_by_hash[1], size_bytes=size_bytes, english_present=bool(existing_by_hash[2]))
+    text, pages = _extract_text_and_pages(pdf_bytes)
+    english = _english_present(text)
+
+    pdf_path, text_path = paths_for(brand, model_number, doc_type, sha, equipment_category)
+    if not pdf_path.exists():
+        pdf_path.write_bytes(pdf_bytes)
+    if text:
+        with gzip.open(text_path, "wt", encoding="utf-8") as f:
+            f.write(text)
+
+    now = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+
+    doc = {
+        "brand": brand.lower(),
+        "model_number": model_number,
+        "doc_type": doc_type,
+        "equipment_category": equipment_category,
+        "equipment_type": equipment_type,
+        "title": title,
+        "language": "en" if english else None,
+        "published_at": None,
+        "source_url": source_url,
+        "file_url": file_url,
+        "file_sha256": sha,
+        "size_bytes": size_bytes,
+        "pages": pages,
+        "ocr_applied": 0,
+        "english_present": 1 if english else 0,
+        "status": "ok",
+        "http_status": 200,
+        "local_path": str(pdf_path),
+        "text_path": str(text_path),
+        "text": text,
+        "ingested_at": now,
+        "last_seen_at": now,
+    }
+
+    doc_id = db.insert_or_ignore_document(doc)
+    return IngestResult(id=doc_id, sha256=sha, pages=pages, size_bytes=size_bytes, english_present=english)
+
+
+def ingest_from_url(brand: str, model_number: str, doc_type: str, title: str, source_url: str, file_url: str, equipment_category: str = "appliance", equipment_type: str = "unknown") -> IngestResult:
+    # Check if we already have this document (by brand, model, doc_type)
+    existing = db.get_db().execute("SELECT id, file_sha256, pages, size_bytes, english_present FROM documents WHERE brand = ? AND model_number = ? AND doc_type = ?", (brand.lower(), model_number, doc_type)).fetchone()
+    if existing:
+        logger.info(f"Skipping duplicate document: {brand} {model_number} {doc_type}")
+        return IngestResult(id=existing[0], sha256=existing[1], pages=existing[2], size_bytes=existing[3], english_present=bool(existing[4]))
+    
+    logger.info(f"Downloading PDF: {file_url}")
+    http_status = 200  # Default for local files
+    if file_url.startswith('/'):
+        with open(file_url, 'rb') as f:
+            pdf_bytes = f.read()
+    else:
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+            'Accept': 'application/pdf,*/*',
+            'Accept-Language': 'en-US,en;q=0.9',
+            'Referer': source_url,
+        }
+        resp = requests.get(file_url, headers=headers, timeout=20, stream=True)  # Increased timeout and stream
+        resp.raise_for_status()
+        http_status = resp.status_code
+        pdf_bytes = resp.content
+    size_bytes = len(pdf_bytes)
+    sha = _sha256_bytes(pdf_bytes)
+    
 
     text, pages = _extract_text_and_pages(pdf_bytes)
     english = _english_present(text)
@@ -102,7 +170,7 @@ def ingest_from_url(brand: str, model_number: str, doc_type: str, title: str, so
         "ocr_applied": 0,
         "english_present": 1 if english else 0,
         "status": "ok",
-        "http_status": resp.status_code,
+        "http_status": http_status,
         "local_path": str(pdf_path),
         "text_path": str(text_path),
         "text": text,
