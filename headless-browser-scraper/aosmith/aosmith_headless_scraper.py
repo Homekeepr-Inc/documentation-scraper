@@ -31,27 +31,17 @@ from utils import safe_driver_get, wait_for_download, validate_pdf_file, validat
 
 def aosmith_scrape_callback(driver):
     """
-    Callback function for A.O. Smith scraping after navigating to the product page via DuckDuckGo.
+    Callback function for A.O. Smith scraping on aosmithatlowes.com after navigating to the product page via DuckDuckGo.
     """
     try:
         # Scroll down
         driver.execute_script("window.scrollTo(0,192)")
 
-        # Click the tabcordion section for "Use & Care Instructions"
+        # Find the Owners Manual link directly
         WebDriverWait(driver, 10).until(
-            EC.element_to_be_clickable((By.CSS_SELECTOR, ".tabcordion-tabsection.tabcordion-tabsection-5"))
+            EC.presence_of_element_located((By.CSS_SELECTOR, "a[title*='Owners Manual']"))
         )
-        tab_section = driver.find_element(By.CSS_SELECTOR, ".tabcordion-tabsection.tabcordion-tabsection-5")
-        tab_section.click()
-
-        # Wait for the content to load
-        WebDriverWait(driver, 10).until(
-            EC.presence_of_element_located((By.CSS_SELECTOR, ".tabcordion-content.tabcordion-content-5"))
-        )
-
-        # Find the Owners Manual link
-        content_div = driver.find_element(By.CSS_SELECTOR, ".tabcordion-content.tabcordion-content-5")
-        manual_link = content_div.find_element(By.CSS_SELECTOR, "a[title*='Owners Manual']")
+        manual_link = driver.find_element(By.CSS_SELECTOR, "a[title*='Owners Manual']")
         file_url = manual_link.get_attribute("href")
         if not file_url.startswith('http'):
             from urllib.parse import urljoin
@@ -68,8 +58,140 @@ def aosmith_scrape_callback(driver):
         }
 
     except Exception as e:
-        print(f"Error in A.O. Smith callback: {e}")
+        print(f"Error in A.O. Smith primary callback: {e}")
         return None
+
+
+def aosmith_fallback_callback(driver):
+    """
+    Callback function for A.O. Smith fallback scraping on hotwater.com after navigating to the product page via DuckDuckGo.
+    """
+    try:
+        # Scroll a bit
+        driver.execute_script("window.scrollTo(0,21)")
+
+        # Click the "Product Literature" tab
+        WebDriverWait(driver, 10).until(
+            EC.element_to_be_clickable((By.ID, "tab-C"))
+        )
+        tab_c = driver.find_element(By.ID, "tab-C")
+        ActionChains(driver).move_to_element(tab_c).click().perform()
+        time.sleep(2)  # Wait for content to load
+        driver.execute_script("window.scrollTo(0,50)")  # Scroll a bit more
+
+        # Find and click a manual link (look for link containing "Manual")
+        WebDriverWait(driver, 15).until(
+            EC.presence_of_element_located((By.PARTIAL_LINK_TEXT, "Manual"))
+        )
+        manual_links = driver.find_elements(By.PARTIAL_LINK_TEXT, "Manual")
+        if not manual_links:
+            raise Exception("No manual links found")
+        manual_link = manual_links[0]  # Click the first one
+        file_url = manual_link.get_attribute("href")
+        title = manual_link.text or "A.O. Smith Manual"
+
+        # Click the link, which opens a new window
+        manual_link.click()
+
+        # Wait for new window and switch
+        WebDriverWait(driver, 10).until(lambda d: len(d.window_handles) > 1)
+        new_window = [h for h in driver.window_handles if h != driver.current_window_handle][0]
+        driver.switch_to.window(new_window)
+
+        return {
+            'file_url': file_url,
+            'title': title,
+            'source_url': driver.current_url,
+        }
+
+    except Exception as e:
+        print(f"Error in A.O. Smith fallback callback: {e}")
+        return None
+
+
+# Fallback scraping mechanism for A.O. Smith manuals on hotwater.com
+def fallback_scrape(model):
+    """
+    Fallback scraping mechanism for A.O. Smith manuals on hotwater.com.
+    """
+    options = uc.ChromeOptions()
+    options.add_argument('--headless')
+    options.add_argument('--disable-dev-shm-usage')
+    options.add_argument('--disable-gpu')
+    options.add_argument('--window-size=1920,1080')
+    options.add_argument('--user-agent=Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36')
+
+    # Set download preferences
+    temp_dir = create_temp_download_dir()
+    download_dir = temp_dir
+    options.add_experimental_option("prefs", {
+        "download.default_directory": download_dir,
+        "download.prompt_for_download": False,
+        "download.directory_upgrade": True,
+        "plugins.always_open_pdf_externally": True
+    })
+
+    driver = uc.Chrome(options=options)
+
+    try:
+        print(f"Primary scraping failed for {model}, trying fallback on hotwater.com...")
+        # Search DuckDuckGo for the model
+        safe_driver_get(driver, f"https://duckduckgo.com/?q={model}")
+        time.sleep(random.uniform(0.5, 1.0))
+
+        # Wait for search results
+        WebDriverWait(driver, 10).until(
+            EC.presence_of_element_located((By.CSS_SELECTOR, "a[data-testid='result-title-a']"))
+        )
+
+        # Find the first result link that contains hotwater.com
+        result_links = driver.find_elements(By.CSS_SELECTOR, "a[data-testid='result-title-a']")
+        trusted_link = None
+        for link in result_links:
+            href = link.get_attribute('href')
+            if href and 'hotwater.com' in href:
+                trusted_link = link
+                break
+
+        if not trusted_link:
+            print("No hotwater.com link found in search results")
+            return None
+
+        # Click the trusted link
+        trusted_link.click()
+        time.sleep(random.uniform(0.5, 1.0))
+
+        # Now on the hotwater.com page, call the callback
+        result = aosmith_fallback_callback(driver)
+
+        if result:
+            # Wait for download after callback
+            pdf_path = wait_for_download(download_dir, timeout=30)
+
+            if pdf_path and validate_pdf_file(pdf_path):
+                print(f"Downloaded and validated PDF from fallback: {pdf_path}")
+                normalized_model = model.replace('/', '_')
+                return {
+                    'brand': 'aosmith',
+                    'model_number': normalized_model,
+                    'doc_type': 'owner',
+                    'title': result['title'],
+                    'source_url': result['source_url'],
+                    'file_url': result['file_url'],
+                    'local_path': pdf_path,
+                }
+            else:
+                print("No valid PDF downloaded from fallback.")
+                return None
+        else:
+            print("Fallback on hotwater.com failed.")
+            return None
+
+    except Exception as e:
+        print(f"An error occurred during fallback scraping for model {model}: {e}")
+        return None
+    finally:
+        driver.quit()
 
 
 def scrape_aosmith_manual(model):
@@ -130,8 +252,9 @@ def scrape_aosmith_manual(model):
                 print("No valid PDF downloaded.")
                 return None
         else:
-            print("DuckDuckGo fallback failed.")
-            return None
+            print("Primary DuckDuckGo fallback failed, trying secondary fallback...")
+            # Try secondary fallback on hotwater.com
+            return fallback_scrape(model)
 
     except Exception as e:
         print(f"An error occurred during scraping for A.O. Smith {model}: {e}")

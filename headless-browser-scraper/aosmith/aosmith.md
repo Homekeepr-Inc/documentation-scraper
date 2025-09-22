@@ -3,11 +3,15 @@
 This scraper uses DuckDuckGo fallback as the primary method to find A.O. Smith appliance manuals on aosmithatlowes.com.
 
 ## How it works
-- Searches DuckDuckGo for the model number on aosmithatlowes.com
-- Navigates to the product page
-- Scrolls down and clicks the "Use & Care Instructions" tabcordion section to expand it
-- Extracts the Owners Manual PDF URL from the expanded content
-- Navigates directly to the PDF URL to download the manual
+- **Primary**: Searches DuckDuckGo for the model number on aosmithatlowes.com
+  - Navigates to the product page
+  - Scrolls down and locates the Owners Manual link directly
+  - Extracts the PDF URL and navigates to it for download
+- **Fallback**: If primary fails, searches DuckDuckGo for the model (without site restriction)
+  - Clicks the first result linking to hotwater.com
+  - Navigates to the product page
+  - Clicks the "Product Literature" tab
+  - Clicks the first link starting with "Manual", which opens the PDF in a new window
 
 ## Usage
 Run the scraper directly:
