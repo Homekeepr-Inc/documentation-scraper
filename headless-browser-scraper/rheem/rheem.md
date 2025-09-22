@@ -26,4 +26,13 @@ GET /scrape/rheem/{model}
 - Downloads to temp directory, validates PDF, ingests to DB
 
 
-curl -H "X-Homekeepr-Scraper: $SCRAPER_SECRET" "http://localhost:8000/scrape/rheem/XG40T06EN38U1"
+curl -H "X-Homekeepr-Scraper: $SCRAPER_SECRET" "http://localhost:8000/scrape/rheem/XG40T06EN38U1" &
+curl -H "X-Homekeepr-Scraper: $SCRAPER_SECRET" "http://localhost:8000/scrape/rheem/ECO200XELN-3" &
+curl -H "X-Homekeepr-Scraper: $SCRAPER_SECRET" "http://localhost:8000/scrape/rheem/XE40M06ST45U1" &
+curl -H "X-Homekeepr-Scraper: $SCRAPER_SECRET" "http://localhost:8000/scrape/rheem/XG50T06EC36U1" &
+curl -H "X-Homekeepr-Scraper: $SCRAPER_SECRET" "http://localhost:8000/scrape/rheem/PROG50-42N RH67" &
+curl -H "X-Homekeepr-Scraper: $SCRAPER_SECRET" "http://localhost:8000/scrape/rheem/XG40T12HE40U0" &
+curl -H "X-Homekeepr-Scraper: $SCRAPER_SECRET" "http://localhost:8000/scrape/rheem/RTGH-95DVLN-2" &
+curl -H "X-Homekeepr-Scraper: $SCRAPER_SECRET" "http://localhost:8000/scrape/rheem/RTG-95XLN-1" &
+curl -H "X-Homekeepr-Scraper: $SCRAPER_SECRET" "http://localhost:8000/scrape/rheem/RTEX-18" &
+curl -H "X-Homekeepr-Scraper: $SCRAPER_SECRET" "http://localhost:8000/scrape/rheem/RTE-13" 
