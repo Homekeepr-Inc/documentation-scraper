@@ -116,6 +116,9 @@ def worker():
             elif brand == 'aosmith':
                 from aosmith.aosmith_headless_scraper import scrape_aosmith_manual
                 result = scrape_aosmith_manual(model)
+            elif brand == 'rheem':
+                from rheem.rheem_headless_scraper import scrape_rheem_manual
+                result = scrape_rheem_manual(model)
             else:
                 result = None  # Unknown brand
 
