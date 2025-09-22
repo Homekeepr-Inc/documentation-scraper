@@ -10,8 +10,8 @@ This scraper uses DuckDuckGo fallback as the primary method to find A.O. Smith a
 - **Fallback**: If primary fails, searches DuckDuckGo for the model (without site restriction)
   - Clicks the first result linking to hotwater.com
   - Navigates to the product page
-  - Clicks the "Product Literature" tab
-  - Clicks the first link starting with "Manual", which opens the PDF in a new window
+  - If "Series Discontinued" is detected, clicks the literature link (downloads PDF directly)
+  - Otherwise, clicks the "Product Literature" tab, then the first "Manual" link (opens PDF in new window)
 
 ## Usage
 Run the scraper directly:

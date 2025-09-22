@@ -70,33 +70,63 @@ def aosmith_fallback_callback(driver):
         # Scroll a bit
         driver.execute_script("window.scrollTo(0,21)")
 
-        # Click the "Product Literature" tab
-        WebDriverWait(driver, 10).until(
-            EC.element_to_be_clickable((By.ID, "tab-C"))
-        )
-        tab_c = driver.find_element(By.ID, "tab-C")
-        ActionChains(driver).move_to_element(tab_c).click().perform()
-        time.sleep(2)  # Wait for content to load
-        driver.execute_script("window.scrollTo(0,50)")  # Scroll a bit more
+        # Check if the product is discontinued
+        try:
+            discontinued_span = driver.find_element(By.XPATH, "//span[contains(text(), 'Series Discontinued')]")
+            is_discontinued = True
+            print("Product is discontinued, clicking warranty link")
+        except:
+            is_discontinued = False
 
-        # Find and click a manual link (look for link containing "Manual")
-        WebDriverWait(driver, 15).until(
-            EC.presence_of_element_located((By.PARTIAL_LINK_TEXT, "Manual"))
-        )
-        manual_links = driver.find_elements(By.PARTIAL_LINK_TEXT, "Manual")
-        if not manual_links:
-            raise Exception("No manual links found")
-        manual_link = manual_links[0]  # Click the first one
-        file_url = manual_link.get_attribute("href")
-        title = manual_link.text or "A.O. Smith Manual"
+        if is_discontinued:
+            # For discontinued products, click the literature link text
+            WebDriverWait(driver, 10).until(
+                EC.element_to_be_clickable((By.CSS_SELECTOR, ".support-link--literature > .support-link__text"))
+            )
+            literature_text = driver.find_element(By.CSS_SELECTOR, ".support-link--literature > .support-link__text")
+            literature_text.click()
+            time.sleep(1)
 
-        # Click the link, which opens a new window
-        manual_link.click()
+            # Then click the Manual link
+            WebDriverWait(driver, 10).until(
+                EC.element_to_be_clickable((By.LINK_TEXT, "Manual"))
+            )
+            manual_link = driver.find_element(By.LINK_TEXT, "Manual")
+            file_url = manual_link.get_attribute("href")
+            title = "A.O. Smith Manual"
 
-        # Wait for new window and switch
-        WebDriverWait(driver, 10).until(lambda d: len(d.window_handles) > 1)
-        new_window = [h for h in driver.window_handles if h != driver.current_window_handle][0]
-        driver.switch_to.window(new_window)
+            # Click the link, which opens a new window
+            manual_link.click()
+
+        else:
+            # Normal flow for active products
+            # Click the "Product Literature" tab
+            WebDriverWait(driver, 10).until(
+                EC.element_to_be_clickable((By.ID, "tab-C"))
+            )
+            tab_c = driver.find_element(By.ID, "tab-C")
+            ActionChains(driver).move_to_element(tab_c).click().perform()
+            time.sleep(2)  # Wait for content to load
+            driver.execute_script("window.scrollTo(0,50)")  # Scroll a bit more
+
+            # Find and click a manual link (look for link containing "Manual")
+            WebDriverWait(driver, 15).until(
+                EC.presence_of_element_located((By.PARTIAL_LINK_TEXT, "Manual"))
+            )
+            manual_links = driver.find_elements(By.PARTIAL_LINK_TEXT, "Manual")
+            if not manual_links:
+                raise Exception("No manual links found")
+            manual_link = manual_links[0]  # Click the first one
+            file_url = manual_link.get_attribute("href")
+            title = manual_link.text or "A.O. Smith Manual"
+
+            # Click the link, which opens a new window
+            manual_link.click()
+
+            # Wait for new window and switch
+            WebDriverWait(driver, 10).until(lambda d: len(d.window_handles) > 1)
+            new_window = [h for h in driver.window_handles if h != driver.current_window_handle][0]
+            driver.switch_to.window(new_window)
 
         return {
             'file_url': file_url,
