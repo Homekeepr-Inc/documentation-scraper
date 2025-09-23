@@ -1,6 +1,6 @@
 # Rheem Headless Scraper
 
-This scraper uses DuckDuckGo fallback as the primary method to find Rheem water heater manuals on rheem.com, with homedepot.com as fallback.
+This scraper uses DuckDuckGo fallback as the primary method to find Rheem water heater manuals on rheem.com, with homedepot.com and supplyhouse.com as fallbacks.
 
 ## How it works
 - **Primary**: Searches DuckDuckGo for the model number on rheem.com
@@ -9,11 +9,15 @@ This scraper uses DuckDuckGo fallback as the primary method to find Rheem water 
   - Scrolls down and clicks the second accordion button to expand literature
   - Clicks the "Use and Care Instructions" link (opens literature page)
   - On the literature page, clicks "Use and Care Instructions" again to download the PDF
-- **Fallback**: If primary fails, searches DuckDuckGo for the model number on homedepot.com
+- **Fallback 1**: If primary fails, searches DuckDuckGo for the model number on homedepot.com
   - Navigates to the product page
   - Verifies the model number is present in the page content
   - Clicks "Product Details" to expand the section
-  - Clicks the "Use and Care Manual" link to download the PDF
+  - Clicks the "Use and Care Manual" link to download the PDF. If the click is intercepted, it navigates to the href directly.
+- **Fallback 2**: If homedepot.com fails, searches DuckDuckGo for the model number on supplyhouse.com
+  - Navigates to the product page
+  - Verifies the model number is present in the page content
+  - Clicks the link to the user manual to download the PDF.
 
 ## Usage
 Run the scraper directly:
