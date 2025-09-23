@@ -46,7 +46,7 @@ def safe_driver_get(driver, url, timeout=10):
         print(f"Page load timed out after {timeout} seconds for {url}, continuing anyway.")
 
 
-def duckduckgo_fallback(driver, model, host_url, scrape_callback):
+def duckduckgo_fallback(driver, model, host_url, scrape_callback, search_query=None):
     """
     Generic DuckDuckGo fallback mechanism for finding manuals when direct scraping fails.
 
@@ -59,7 +59,8 @@ def duckduckgo_fallback(driver, model, host_url, scrape_callback):
         model (str): The model number to search for
         host_url (str): Trusted domain to filter search results (e.g., 'lg.com/us', 'whirlpool.com')
         scrape_callback (callable): Function to call after navigating to the brand's site.
-                                   Should accept the driver as parameter and return scraping result.
+                                    Should accept the driver as parameter and return scraping result.
+        search_query (str, optional): Custom search query to use. Defaults to f"\"{model}\" owner's manual site:{host_url}"
 
     Returns:
         dict: Scraped data from the callback function, or None if fallback fails
@@ -68,7 +69,8 @@ def duckduckgo_fallback(driver, model, host_url, scrape_callback):
 
     try:
         # Navigate to DuckDuckGo search.
-        search_query = f"{model} owner's manual site:{host_url}"
+        if search_query is None:
+            search_query = f"{model} owner's manual site:{host_url}"
         safe_driver_get(driver, f"https://duckduckgo.com/?q={search_query}")
         time.sleep(random.uniform(0.5, 1.0))
 
@@ -86,7 +88,10 @@ def duckduckgo_fallback(driver, model, host_url, scrape_callback):
         trusted_link = None
         for link in result_links:
             href = link.get_attribute('href')
-            if href and host_url and model.lower() in href.lower():
+            # Skip DuckDuckGo internal links (e.g., related searches suggested by DDG that link back to duckduckgo.com)
+            if href and 'duckduckgo.com' in href.lower():
+                continue
+            if href and host_url in href.lower():
                 print(f"Found trusted link: {href}")
                 trusted_link = link
                 break
@@ -95,7 +100,7 @@ def duckduckgo_fallback(driver, model, host_url, scrape_callback):
             print(f"No trusted link found for {host_url}")
             return None
 
-        # Click the trusted link.
+        # Otherwise, click the link to navigate to the page
         trusted_link.click()
         time.sleep(random.uniform(0.5, 1.0))
 
