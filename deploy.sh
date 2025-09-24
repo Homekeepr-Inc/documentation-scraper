@@ -25,8 +25,11 @@ git pull
 echo "🔨 Building new image: $NEW_TAG"
 docker build -t "$NEW_TAG" .
 
-# Ensure network exists
-docker network create "$NETWORK" || true
+# Ensure Caddy is running (creates network)
+if ! docker ps -q -f ancestor=caddy:2 | grep -q .; then
+    echo "🏁 Starting Caddy..."
+    docker compose up -d caddy
+fi
 
 # Start new container
 echo "▶️  Starting new container"
@@ -58,7 +61,7 @@ sed -i "s/reverse_proxy .*/reverse_proxy $NEW_IP:8000/" Caddyfile
 
 # Reload Caddy
 echo "🔄 Reloading Caddy"
-docker exec $(docker ps -q -f ancestor=caddy:2) caddy reload
+docker exec documentation-scraper_caddy_1 caddy reload
 
 # Wait for drain
 echo "⏳ Waiting $DRAIN_TIME seconds for old container to drain..."
