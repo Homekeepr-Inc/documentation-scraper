@@ -36,6 +36,19 @@ To prevent race conditions between concurrent scraping jobs, each scraper uses i
 
 This approach ensures reliable cleanup while preventing premature deletion of files still being processed by other jobs.
 
+## Configuration
+
+### Proxy Settings
+
+All headless browser scrapers support proxy configuration via the `PROXY_URL` environment variable:
+
+```bash
+export PROXY_URL="username:password@proxy.host:port"
+```
+
+- **Universal application**: Set once to proxy all headless scraping requests
+- **Chrome options**: Automatically adds `--proxy-server` to browser options
+
 ## Conventions to Follow (Important!)
 To ensure timeliness and robustness, we have a few utility functions which should be used in certain circumstances:
 - Never using `print()` calls in loops as they can slow down execution by _many_ orders of magnitude. Progress `print()` calls are fine.

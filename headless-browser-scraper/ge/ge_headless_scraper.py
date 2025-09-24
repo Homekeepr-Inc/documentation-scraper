@@ -24,7 +24,7 @@ from selenium.webdriver.support import expected_conditions as EC
 import os
 import sys
 sys.path.append(os.path.dirname(__file__))
-from utils import safe_driver_get, validate_and_ingest_manual
+from utils import safe_driver_get, validate_and_ingest_manual, get_chrome_options
 from bs4 import BeautifulSoup, Tag
 import requests
 from difflib import SequenceMatcher
@@ -45,14 +45,8 @@ def scrape_ge_manual(model):
         dict: Scraped data or None if not found
     """
     url = f"https://www.geapplianceparts.com/store/parts/assembly/{model}.html"
-
     # Launch undetected Chrome in headless mode
-    options = uc.ChromeOptions()
-    options.add_argument('--headless')
-    options.add_argument('--disable-dev-shm-usage')
-    options.add_argument('--disable-gpu')
-    options.add_argument('--window-size=1920,1080')
-    options.add_argument('--user-agent=Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36')
+    options = get_chrome_options()
 
     driver = uc.Chrome(options=options)
 
