@@ -25,6 +25,9 @@ git pull
 echo "🔨 Building new image: $NEW_TAG"
 docker build -t "$NEW_TAG" .
 
+# Ensure network exists
+docker network create "$NETWORK" || true
+
 # Start new container
 echo "▶️  Starting new container"
 NEW_CONTAINER_ID=$(docker run -d --network "$NETWORK" --env-file .env -v "$(pwd)/data:/app/data" "$NEW_TAG")
