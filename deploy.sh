@@ -19,21 +19,7 @@ git pull
 echo "🚀 Building and deploying with docker compose"
 docker compose up --scale app=2 --build -d
 
-# Wait for health check
-echo "🏥 Waiting for app to be healthy..."
-for i in {1..30}; do
-    if curl -f -H "X-Homekeepr-Scraper: $SCRAPER_SECRET" http://localhost/health > /dev/null 2>&1; then
-        echo "✅ App is healthy"
-        break
-    fi
-    if [ $i -eq 30 ]; then
-        echo "❌ App failed health check"
-        exit 1
-    fi
-    sleep 5
-done
-
-# Scale down to 1
+# Scale down to 1 (Docker waits for healthcheck automatically)
 echo "🔄 Scaling down to 1 app instance"
 docker compose up --scale app=1 -d
 
