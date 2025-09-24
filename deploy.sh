@@ -28,6 +28,7 @@ docker build -t "$NEW_TAG" .
 # Ensure Caddy is running (creates network)
 if ! docker ps -q -f ancestor=caddy:2 | grep -q .; then
     echo "🏁 Starting Caddy..."
+    docker network rm "$NETWORK" || true
     docker compose up -d caddy
 fi
 
