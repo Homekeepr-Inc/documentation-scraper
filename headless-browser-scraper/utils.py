@@ -46,6 +46,7 @@ def get_chrome_options(download_dir=None):
 
     if PROXY_URL:
         options.add_argument(f'--proxy-server={PROXY_URL}')
+        print(f"Using proxy: {PROXY_URL}")
 
     if download_dir:
         options.add_experimental_option("prefs", {
