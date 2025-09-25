@@ -155,7 +155,7 @@ async def scrape_brand_model(brand: str, model: str):
     result = get_job_result(job_id)
 
     if isinstance(result, Exception):
-        raise HTTPException(status_code=500, detail=f"Scraping failed: {result}")
+        raise HTTPException(status_code=500, detail=f"Scraping failed.")
 
 
     if not result:

@@ -22,8 +22,8 @@ import requests
 import tempfile
 import shutil
 
-# Import config for BLOB_ROOT
-from app.config import DEFAULT_BLOB_ROOT
+# Import config for BLOB_ROOT and PROXY_URL
+from app.config import DEFAULT_BLOB_ROOT, PROXY_URL
 
 
 def get_chrome_options(download_dir=None):
@@ -44,6 +44,15 @@ def get_chrome_options(download_dir=None):
     options.add_argument('--disable-popup-blocking')
     options.add_argument('--user-agent=Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36')
 
+    # Use Squid proxy (unauthenticated local proxy forwarding to Rayobyte)
+    squid_proxy = "http://squid:3128"  # Hardcode for clarity; matches Docker Compose env
+    # if PROXY_URL:
+    #     options.add_argument(f'--proxy-server={PROXY_URL}')
+    #     print(f"Using proxy server {PROXY_URL}")
+    # else:
+    #     print("**NO PROXY CONFIGURED**")
+    #     # Fallback to Squid if env not set (though Compose sets it)
+    #     options.add_argument(f'--proxy-server={squid_proxy}')
     if download_dir:
         options.add_experimental_option("prefs", {
             "download.default_directory": download_dir,

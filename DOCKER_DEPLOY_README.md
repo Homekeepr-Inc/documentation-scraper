@@ -14,11 +14,7 @@ This guide explains how to deploy the documentation scraper to a production envi
 ### 1. Place Cloudflare Certificates
 Place your `cert.pem` and `key.pem` files inside the `./caddy/` directory. The `docker-compose.yml` file is already configured to use them by default.
 
-### 2. Configure Proxy (Optional)
-In production, we need to use a proxy for outbound requests:
-1.  Create a directory named `proxy-config`.
-2.  Inside it, create a file named `proxychains4.conf`.
-3.  Edit `proxy-config/proxychains4.conf` and add your proxy details under the `[ProxyList]` section.
+
 
 ### 3. Set Environment Variables
 Create a `.env` file for your production secrets and domain:
