@@ -37,7 +37,7 @@ def get_chrome_options(download_dir=None):
         uc.ChromeOptions: Configured Chrome options
     """
     options = uc.ChromeOptions()
-    # options.add_argument('--headless')
+    options.add_argument('--headless')
     options.add_argument('--disable-dev-shm-usage')
     options.add_argument('--disable-gpu')
     options.add_argument('--window-size=1920,1080')
@@ -46,13 +46,13 @@ def get_chrome_options(download_dir=None):
 
     # Use Squid proxy (unauthenticated local proxy forwarding to Rayobyte)
     squid_proxy = "http://squid:3128"  # Hardcode for clarity; matches Docker Compose env
-    # if PROXY_URL:
-    #     options.add_argument(f'--proxy-server={PROXY_URL}')
-    #     print(f"Using proxy server {PROXY_URL}")
-    # else:
-    #     print("**NO PROXY CONFIGURED**")
-    #     # Fallback to Squid if env not set (though Compose sets it)
-    #     options.add_argument(f'--proxy-server={squid_proxy}')
+    if PROXY_URL:
+        options.add_argument(f'--proxy-server={PROXY_URL}')
+        print(f"Using proxy server {PROXY_URL}")
+    else:
+        print("**NO PROXY CONFIGURED**")
+        # Fallback to Squid if env not set (though Compose sets it)
+        options.add_argument(f'--proxy-server={squid_proxy}')
     if download_dir:
         options.add_experimental_option("prefs", {
             "download.default_directory": download_dir,
