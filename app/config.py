@@ -31,8 +31,6 @@ DOWNLOAD_DELAY = float(os.environ.get("DOWNLOAD_DELAY", DEFAULT_DOWNLOAD_DELAY))
 DEFAULT_API_PORT = 8000
 API_PORT = int(os.environ.get("API_PORT", DEFAULT_API_PORT))
 
-# Proxy Configuration
-PROXY_URL = os.environ.get("PROXY_URL")
 
 # Internet Archive Configuration
 IA_SEARCH_URL = "https://archive.org/advancedsearch.php"

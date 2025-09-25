@@ -1,51 +1,54 @@
 # Docker Deployment Guide
 
-This guide explains how to deploy the documentation scraper using Docker Compose with zero-downtime updates.
+This guide explains how to deploy the documentation scraper to a production environment using Docker Compose. 
+
+**The system is configured for production by default and changes must be made for a local dev enviornment to work.**
 
 ## Prerequisites
-- Docker and Docker Compose installed
-- Git repository with deploy key set up for `git pull`
+- Docker and Docker Compose installed.
+- A domain name pointed at the VPS.
+- Cloudflare Authenticated Origin Pull certificates (`cert.pem` and `key.pem`).
 
-## Initial Setup
-1. Clone the repository and navigate to the directory.
-2. Update `.env` with your actual secrets (e.g., `SCRAPER_SECRET`).
-3. Start Caddy reverse proxy:
-   ```
-   docker-compose up -d caddy
-   ```
-4. Run the initial deployment:
-   ```
-   ./deploy.sh
-   ```
-   This will build the image, start the app container, and configure Caddy to proxy traffic to it.
+## Production Configuration
 
-## Zero-Downtime Deployment
-To deploy updates:
-1. Ensure you're on the main branch.
-2. Run:
-   ```
-   ./deploy.sh
-   ```
-   The script will:
-   - Pull latest code
-   - Build new image
-   - Start new app container
-   - Wait for health check
-   - Switch Caddy to route traffic to new container
-   - Wait 60 seconds for old container to drain
-   - Stop old container
-   - Clean up
+### 1. Place Cloudflare Certificates
+Place your `cert.pem` and `key.pem` files inside the `./caddy/` directory. The `docker-compose.yml` file is already configured to use them by default.
+
+### 2. Configure Proxy (Optional)
+In production, we need to use a proxy for outbound requests:
+1.  Create a directory named `proxy-config`.
+2.  Inside it, create a file named `proxychains4.conf`.
+3.  Edit `proxy-config/proxychains4.conf` and add your proxy details under the `[ProxyList]` section.
+
+### 3. Set Environment Variables
+Create a `.env` file for your production secrets and domain:
+
+```env
+# .env (production)
+# This should match the domain covered by your Cloudflare certificates.
+DOMAIN_NAME=api.homekeepr.co
+
+# Add any other required secrets
+SCRAPER_SECRET=your_production_secret
+```
+
+## Deployment
+
+### Initial Deployment
+Run the services in detached mode:
+```bash
+docker-compose up -d
+```
+
+### Zero-Downtime Updates
+For zero-downtime deployments, use the provided script:
+```bash
+./deploy.sh
+```
+The script handles pulling the latest code, building the new image, and gracefully switching traffic without downtime.
 
 ## Accessing the App
-- Web UI: http://localhost
-- API: http://localhost/documents, etc.
+Once deployed, the application will be available at `https://api.homekeepr.co`.
 
-## Troubleshooting
-- If deployment fails, check logs: `docker logs <container_id>`
-- To rollback, run `./deploy.sh` with the previous image tag (modify script temporarily).
-- Ensure `.env` has correct secrets.
-
-## Notes
-- Scraping jobs are queued to prevent multiple instances.
-- Temp files are ephemeral in containers.
-- Persistent data (DB, files) is in `./data` volume.
+## Local Development
+For instructions on how to run the application on a local machine, please see the "Local Development Setup" section in the main `README.md` file.

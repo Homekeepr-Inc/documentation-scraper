@@ -40,14 +40,10 @@ This approach ensures reliable cleanup while preventing premature deletion of fi
 
 ### Proxy Settings
 
-All headless browser scrapers support proxy configuration via the `PROXY_URL` environment variable:
+All headless browser scrapers are automatically proxied using `proxychains-ng` when run inside the Docker container. The proxy is configured via the `proxychains.conf` file and the `PROXY_URL` environment variable.
 
-```bash
-export PROXY_URL="username:password@proxy.host:port"
-```
-
-- **Universal application**: Set once to proxy all headless scraping requests
-- **Chrome options**: Automatically adds `--proxy-server` to browser options
+- **Transparent proxying**: No code changes are needed to use the proxy.
+- **Configuration**: The proxy is configured in the `Dockerfile` and `docker-compose.yml`.
 
 ## Conventions to Follow (Important!)
 To ensure timeliness and robustness, we have a few utility functions which should be used in certain circumstances:

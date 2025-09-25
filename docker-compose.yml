@@ -4,7 +4,9 @@ services:
     env_file:
       - .env
     volumes:
-      - ./data:/app/data
+       - ./data:/app/data
+       - ./proxy-config/proxychains4.conf:/etc/proxychains4.conf
+    command: ["/usr/bin/proxychains4", "uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
       interval: 30s
@@ -15,13 +17,16 @@ services:
        - app_network
 
   caddy:
-      image: caddy:2
-      working_dir: /etc/caddy
-      ports:
-       - "443:443"
-      volumes:
-        - ./caddy:/etc/caddy
-      networks:
+       image: caddy:2
+       environment:
+         - DOMAIN_NAME=${DOMAIN_NAME:-api.homekeepr.co}
+         - TLS_DIRECTIVE=${TLS_DIRECTIVE:-tls /etc/caddy/cert.pem /etc/caddy/key.pem}
+       working_dir: /etc/caddy
+       ports:
+        - "443:443"
+       volumes:
+         - ./caddy:/etc/caddy
+       networks:
        - app_network
 
 networks:

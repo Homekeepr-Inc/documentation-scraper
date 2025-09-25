@@ -2,6 +2,35 @@
 
 A comprehensive system for collecting, processing, and serving documentation for all home equipment and systems (appliances, HVAC, solar, electrical, plumbing, roofing, security) from multiple sources.
 
+## 🐳 Local Development Setup (Docker)
+
+This project is configured for production by default. To run it on your local machine, you need to override the production settings using a `.env` file.
+
+1.  **Create a `.env` file** in the root of the project.
+2.  **Add the following content** to the file:
+
+    ```env
+    # .env (local development settings)
+
+    # Override the domain to localhost for local development
+    DOMAIN_NAME=localhost
+
+    # Disable the production TLS directive to let Caddy use its own self-signed certs
+    TLS_DIRECTIVE=
+    ```
+
+3.  **Run Docker Compose:**
+
+    ```bash
+    docker-compose up
+    ```
+
+4.  **Access the application** at `https://localhost`. You may need to accept a browser warning for the self-signed certificate.
+
+---
+
+## 🚀 Quick Start (Without Docker)
+
 ## 🚀 Quick Start
 
 ```bash
