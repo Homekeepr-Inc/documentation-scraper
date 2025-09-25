@@ -2,6 +2,7 @@
 data/storage/*
 .DS_Store
 *.pem
+proxychains4.config
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
