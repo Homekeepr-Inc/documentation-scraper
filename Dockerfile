@@ -1,8 +1,13 @@
-FROM python:3.11-slim
+FROM selenium/standalone-chrome
 
-# Install system dependencies for Chrome
+USER root
+
+# Install Python 3.11
 RUN apt-get update && apt-get install -y \
-    chromium \
+    software-properties-common \
+    && add-apt-repository ppa:deadsnakes/ppa \
+    && apt-get update \
+    && apt-get install -y python3.11 \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
 
@@ -11,7 +16,7 @@ WORKDIR /app
 
 # Copy requirements and install Python dependencies
 COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+RUN python3 -m pip install --no-cache-dir -r requirements.txt
 
 # Copy the entire project
 COPY . .
