@@ -17,12 +17,9 @@ services:
   caddy:
      image: caddy:2
      ports:
-       - "80:80"
        - "443:443"
      volumes:
-       - ./Caddyfile:/etc/caddy/Caddyfile
-       - ./cert.pem:/etc/caddy/cert.pem
-       - ./key.pem:/etc/caddy/key.pem
+        - ./caddy:/etc/caddy
      networks:
        - app_network
 
