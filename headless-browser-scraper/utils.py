@@ -42,6 +42,9 @@ def get_chrome_options(download_dir=None):
     options.add_argument('--disable-gpu')
     options.add_argument('--window-size=1280,720')
     options.add_argument('--disable-popup-blocking')
+    options.add_argument('--disable-images')
+    options.add_argument('--disable-plugins')
+    options.add_argument('--disable-extensions')
     options.add_argument('--user-agent=Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36')
 
     # Use Squid proxy (unauthenticated local proxy forwarding to Rayobyte)
