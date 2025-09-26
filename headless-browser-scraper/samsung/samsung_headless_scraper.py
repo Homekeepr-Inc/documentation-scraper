@@ -32,7 +32,7 @@ sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
 from app.config import DEFAULT_BLOB_ROOT
 
 # Import utility functions
-from utils import safe_driver_get, wait_for_download, validate_pdf_file, validate_and_ingest_manual, create_temp_download_dir, cleanup_temp_dir, get_chrome_options
+from utils import safe_driver_get, wait_for_download, validate_pdf_file, validate_and_ingest_manual, create_temp_download_dir, cleanup_temp_dir, get_chrome_options, create_chrome_driver
 
 
 # Was having issues re-using the main Selenium driver during fallbacks, so we create a new one here.
@@ -45,7 +45,7 @@ def fallback_scrape(model):
     download_dir = temp_dir
     options = get_chrome_options(download_dir)
 
-    driver = uc.Chrome(options=options)
+    driver = create_chrome_driver(options=options)
 
     try:
         print(f"Primary scraping failed for {model}, trying fallback...")
@@ -140,7 +140,7 @@ def scrape_samsung_manual(model):
     download_dir = temp_dir
     options = get_chrome_options(download_dir)
 
-    driver = uc.Chrome(options=options)
+    driver = create_chrome_driver(options=options)
 
     try:
         print(f"Fetching page for model {model}...")

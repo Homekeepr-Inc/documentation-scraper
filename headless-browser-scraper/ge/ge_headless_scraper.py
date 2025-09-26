@@ -24,7 +24,7 @@ from selenium.webdriver.support import expected_conditions as EC
 import os
 import sys
 sys.path.append(os.path.dirname(__file__))
-from utils import safe_driver_get, validate_and_ingest_manual, get_chrome_options
+from utils import safe_driver_get, validate_and_ingest_manual, get_chrome_options, create_chrome_driver
 from bs4 import BeautifulSoup, Tag
 import requests
 from difflib import SequenceMatcher
@@ -48,7 +48,7 @@ def scrape_ge_manual(model):
     # Launch undetected Chrome in headless mode
     options = get_chrome_options()
 
-    driver = uc.Chrome(options=options)
+    driver = create_chrome_driver(options=options)
 
     try:
         print(f"Fetching page for model {model}...")

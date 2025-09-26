@@ -66,6 +66,24 @@ def get_chrome_options(download_dir=None):
     return options
 
 
+def create_chrome_driver(options=None, download_dir=None):
+    """
+    Create a Chrome driver using undetected-chromedriver with system chromedriver to avoid download concurrency.
+
+    Args:
+        options (uc.ChromeOptions, optional): Chrome options. If None, uses get_chrome_options().
+        download_dir (str, optional): Download directory for options.
+
+    Returns:
+        uc.Chrome: Chrome driver instance
+    """
+    if options is None:
+        options = get_chrome_options(download_dir)
+    # Use system chromedriver to avoid undetected's download
+    driver_executable_path = '/usr/bin/chromedriver'
+    return uc.Chrome(options=options, driver_executable_path=driver_executable_path)
+
+
 def safe_driver_get(driver, url, timeout=15):
     """
     Safely navigate to a URL with a page load timeout.

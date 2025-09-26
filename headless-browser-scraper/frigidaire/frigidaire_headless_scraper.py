@@ -32,7 +32,7 @@ from app.config import DEFAULT_BLOB_ROOT
 
 # Import utility functions
 sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
-from utils import duckduckgo_fallback, validate_pdf_file, wait_for_download, safe_driver_get, validate_and_ingest_manual, get_chrome_options
+from utils import duckduckgo_fallback, validate_pdf_file, wait_for_download, safe_driver_get, validate_and_ingest_manual, get_chrome_options, create_chrome_driver
 
 
 def parse_manual_links(driver, model):
@@ -179,7 +179,7 @@ def scrape_frigidaire_manual(model):
     os.makedirs(download_dir, exist_ok=True)
     options = get_chrome_options(download_dir)
 
-    driver = uc.Chrome(options=options)
+    driver = create_chrome_driver(options=options)
 
     try:
         print(f"Trying direct URL for model {model}...")
