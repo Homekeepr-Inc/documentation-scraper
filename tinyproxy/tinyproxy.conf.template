@@ -179,7 +179,7 @@ LogLevel Info
 #Upstream http some.remote.proxy:port
 
 # Upstream proxy to Rayobyte datacenter proxy
-upstream http ${UPSTREAM_PROXY}
+upstream socks5 ${UPSTREAM_PROXY}
 
 #
 # MaxClients: This is the absolute highest number of threads which will
