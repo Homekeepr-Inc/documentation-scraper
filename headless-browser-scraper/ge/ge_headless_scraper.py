@@ -56,7 +56,7 @@ def scrape_ge_manual(model):
         print(f"Current URL: {driver.current_url}")
 
         # Wait for the page to load
-        WebDriverWait(driver, 10).until(
+        WebDriverWait(driver, 5).until(
             EC.presence_of_element_located((By.TAG_NAME, "body"))
         )
         time.sleep(2)
@@ -74,7 +74,7 @@ def scrape_ge_manual(model):
             print(f"Current URL: {driver.current_url}")
 
             # Wait for the search results to load and re-parse the page
-            WebDriverWait(driver, 10).until(EC.presence_of_element_located((By.TAG_NAME, "body")))
+            WebDriverWait(driver, 5).until(EC.presence_of_element_located((By.TAG_NAME, "body")))
             time.sleep(2)
             page_source = driver.page_source
             soup = BeautifulSoup(page_source, 'html.parser')
@@ -112,7 +112,7 @@ def scrape_ge_manual(model):
                     safe_driver_get(driver, variant_url)
                     print(f"Navigated to variant: {driver.current_url}")
                     # Wait and re-parse
-                    WebDriverWait(driver, 10).until(EC.presence_of_element_located((By.TAG_NAME, "body")))
+                    WebDriverWait(driver, 5).until(EC.presence_of_element_located((By.TAG_NAME, "body")))
                     time.sleep(2)
                     page_source = driver.page_source
                     soup = BeautifulSoup(page_source, 'html.parser')
@@ -124,7 +124,7 @@ def scrape_ge_manual(model):
                         safe_driver_get(driver, manual_url)
                         print(f"Navigated to manual: {driver.current_url}")
                         # Wait and re-parse
-                        WebDriverWait(driver, 10).until(EC.presence_of_element_located((By.TAG_NAME, "body")))
+                        WebDriverWait(driver, 5).until(EC.presence_of_element_located((By.TAG_NAME, "body")))
                         time.sleep(2)
                         page_source = driver.page_source
                         soup = BeautifulSoup(page_source, 'html.parser')
@@ -147,7 +147,7 @@ def scrape_ge_manual(model):
                             safe_driver_get(driver, manual_url)
                             print(f"Navigated to manual: {driver.current_url}")
                             # Wait and re-parse
-                            WebDriverWait(driver, 10).until(EC.presence_of_element_located((By.TAG_NAME, "body")))
+                            WebDriverWait(driver, 5).until(EC.presence_of_element_located((By.TAG_NAME, "body")))
                             time.sleep(2)
                             page_source = driver.page_source
                             soup = BeautifulSoup(page_source, 'html.parser')
@@ -160,7 +160,7 @@ def scrape_ge_manual(model):
                                 safe_driver_get(driver, assembly_url)
                                 print(f"Navigated to variant: {driver.current_url}")
                                 # Wait and re-parse
-                                WebDriverWait(driver, 10).until(EC.presence_of_element_located((By.TAG_NAME, "body")))
+                                WebDriverWait(driver, 5).until(EC.presence_of_element_located((By.TAG_NAME, "body")))
                                 time.sleep(2)
                                 page_source = driver.page_source
                                 soup = BeautifulSoup(page_source, 'html.parser')
@@ -172,7 +172,7 @@ def scrape_ge_manual(model):
                                     safe_driver_get(driver, manual_url)
                                     print(f"Navigated to manual: {driver.current_url}")
                                     # Wait and re-parse
-                                    WebDriverWait(driver, 10).until(EC.presence_of_element_located((By.TAG_NAME, "body")))
+                                    WebDriverWait(driver, 5).until(EC.presence_of_element_located((By.TAG_NAME, "body")))
                                     time.sleep(2)
                                     page_source = driver.page_source
                                     soup = BeautifulSoup(page_source, 'html.parser')

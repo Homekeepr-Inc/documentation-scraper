@@ -47,7 +47,7 @@ def rheem_rheem_callback(driver, model):
         time.sleep(0.5)
 
         # Click the "Documentation" accordion button
-        WebDriverWait(driver, 10).until(
+        WebDriverWait(driver, 5).until(
             EC.element_to_be_clickable((By.XPATH, "//button[text()='Documentation']"))
         )
         accordion_button = driver.find_element(By.XPATH, "//button[text()='Documentation']")
@@ -57,14 +57,14 @@ def rheem_rheem_callback(driver, model):
         time.sleep(1)
 
         # Click "Use and Care Instructions" link
-        WebDriverWait(driver, 10).until(
+        WebDriverWait(driver, 5).until(
             EC.element_to_be_clickable((By.LINK_TEXT, "Use and Care Instructions"))
         )
         manual_link = driver.find_element(By.LINK_TEXT, "Use and Care Instructions")
         manual_link.click()
 
         # Wait for new window and switch
-        WebDriverWait(driver, 10).until(lambda d: len(d.window_handles) > 1)
+        WebDriverWait(driver, 5).until(lambda d: len(d.window_handles) > 1)
         new_window = [h for h in driver.window_handles if h != driver.current_window_handle][0]
         driver.switch_to.window(new_window)
         time.sleep(1)
@@ -103,7 +103,7 @@ def rheem_homedepot_callback(driver, model):
     """
     try:
         # Wait for page to load
-        WebDriverWait(driver, 10).until(
+        WebDriverWait(driver, 5).until(
             EC.presence_of_element_located((By.TAG_NAME, 'body'))
         )
 
@@ -119,7 +119,7 @@ def rheem_homedepot_callback(driver, model):
         time.sleep(1)
 
         # Click "Product Details" to expand
-        WebDriverWait(driver, 10).until(
+        WebDriverWait(driver, 5).until(
             EC.element_to_be_clickable((By.XPATH, "//h3[text()='Product Details']"))
         )
         product_details = driver.find_element(By.XPATH, "//h3[text()='Product Details']")
@@ -127,7 +127,7 @@ def rheem_homedepot_callback(driver, model):
         time.sleep(1)
 
         # Find the "Use and Care Manual" link
-        WebDriverWait(driver, 10).until(
+        WebDriverWait(driver, 5).until(
             EC.element_to_be_clickable((By.LINK_TEXT, "Use and Care Manual"))
         )
         manual_link = driver.find_element(By.LINK_TEXT, "Use and Care Manual")
@@ -191,7 +191,7 @@ def rheem_supplyhouse_callback(driver, model):
         element2.click()
 
         # Wait for new window and switch
-        WebDriverWait(driver, 10).until(lambda d: len(d.window_handles) > 1)
+        WebDriverWait(driver, 5).until(lambda d: len(d.window_handles) > 1)
         new_window = [h for h in driver.window_handles if h != driver.current_window_handle][0]
         driver.switch_to.window(new_window)
         time.sleep(1)

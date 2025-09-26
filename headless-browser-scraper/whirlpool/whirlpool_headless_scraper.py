@@ -44,7 +44,7 @@ def fallback_scrape(driver, model, search_url, download_dir):
         print(f"Navigated to direct URL: {direct_url}")
 
         # Wait for page to load
-        WebDriverWait(driver, 10).until(
+        WebDriverWait(driver, 5).until(
             EC.presence_of_element_located((By.TAG_NAME, "body"))
         )
         print("Direct page loaded.")
@@ -53,7 +53,7 @@ def fallback_scrape(driver, model, search_url, download_dir):
         try:
             print("Searching for Owner's Manual link using data-doc-type")
             # Look for the div with data-doc-type='owners-manual' and get the a inside it
-            manual_link = WebDriverWait(driver, 10).until(
+            manual_link = WebDriverWait(driver, 5).until(
                 EC.presence_of_element_located((By.XPATH, "//div[@data-doc-type='owners-manual']//a"))
             )
             print("Found owner's manual document link.")
@@ -134,7 +134,7 @@ def scrape_whirlpool_manual(model):
 
         # Wait for page to load
         print("Waiting for page elements to load...")
-        WebDriverWait(driver, 10).until(
+        WebDriverWait(driver, 5).until(
             EC.presence_of_element_located((By.CLASS_NAME, "clp-item-link"))
         )
         print("Page loaded successfully.")

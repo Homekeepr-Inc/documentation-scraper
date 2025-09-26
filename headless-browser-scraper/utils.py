@@ -116,7 +116,7 @@ def duckduckgo_fallback(driver, model, host_url, scrape_callback, search_query=N
         print(f"DuckDuckGo search loaded for: {search_query}")
 
         # Wait for search results to appear.
-        WebDriverWait(driver, 10).until(
+        WebDriverWait(driver, 5).until(
             EC.presence_of_element_located((By.CSS_SELECTOR, "a[data-testid='result-title-a']"))
         )
 

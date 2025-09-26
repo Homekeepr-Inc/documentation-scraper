@@ -38,7 +38,7 @@ def aosmith_scrape_callback(driver):
         driver.execute_script("window.scrollTo(0,192)")
 
         # Find the Owners Manual link directly
-        WebDriverWait(driver, 10).until(
+        WebDriverWait(driver, 5).until(
             EC.presence_of_element_located((By.CSS_SELECTOR, "a[title*='Owners Manual']"))
         )
         manual_link = driver.find_element(By.CSS_SELECTOR, "a[title*='Owners Manual']")
@@ -80,7 +80,7 @@ def aosmith_fallback_callback(driver):
 
         if is_discontinued:
             # For discontinued products, click the literature link text
-            WebDriverWait(driver, 10).until(
+            WebDriverWait(driver, 5).until(
                 EC.element_to_be_clickable((By.CSS_SELECTOR, ".support-link--literature > .support-link__text"))
             )
             literature_text = driver.find_element(By.CSS_SELECTOR, ".support-link--literature > .support-link__text")
@@ -88,7 +88,7 @@ def aosmith_fallback_callback(driver):
             time.sleep(1)
 
             # Then click the Manual link
-            WebDriverWait(driver, 10).until(
+            WebDriverWait(driver, 5).until(
                 EC.element_to_be_clickable((By.LINK_TEXT, "Manual"))
             )
             manual_link = driver.find_element(By.LINK_TEXT, "Manual")
@@ -101,7 +101,7 @@ def aosmith_fallback_callback(driver):
         else:
             # Normal flow for active products
             # Click the "Product Literature" tab
-            WebDriverWait(driver, 10).until(
+            WebDriverWait(driver, 5).until(
                 EC.element_to_be_clickable((By.ID, "tab-C"))
             )
             tab_c = driver.find_element(By.ID, "tab-C")
@@ -124,7 +124,7 @@ def aosmith_fallback_callback(driver):
             manual_link.click()
 
             # Wait for new window and switch
-            WebDriverWait(driver, 10).until(lambda d: len(d.window_handles) > 1)
+            WebDriverWait(driver, 5).until(lambda d: len(d.window_handles) > 1)
             new_window = [h for h in driver.window_handles if h != driver.current_window_handle][0]
             driver.switch_to.window(new_window)
 
@@ -158,7 +158,7 @@ def fallback_scrape(model):
         time.sleep(random.uniform(0.5, 1.0))
 
         # Wait for search results
-        WebDriverWait(driver, 10).until(
+        WebDriverWait(driver, 5).until(
             EC.presence_of_element_located((By.CSS_SELECTOR, "a[data-testid='result-title-a']"))
         )
 

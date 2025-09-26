@@ -65,7 +65,7 @@ def fallback_scrape(model):
         safe_driver_get(driver, fallback_url)
         print(f"Navigated to fallback URL: {fallback_url}")
 
-        WebDriverWait(driver, 10).until(
+        WebDriverWait(driver, 5).until(
             EC.presence_of_element_located((By.CSS_SELECTOR, ".bmpg-ownersManualLink"))
         )
 
@@ -174,7 +174,7 @@ def scrape_samsung_manual(model):
         # Wait for search results and try to find the model link
         model_link = None
         try:
-            WebDriverWait(driver, 10).until(
+            WebDriverWait(driver, 5).until(
                 EC.presence_of_element_located((By.CSS_SELECTOR, f'a[data-modelcode="{model_code}"]'))
             )
             model_link = driver.find_element(By.CSS_SELECTOR, f'a[data-modelcode="{model_code}"]')
@@ -197,7 +197,7 @@ def scrape_samsung_manual(model):
         model_link.click()
 
         # Wait for the model page to load
-        WebDriverWait(driver, 10).until(
+        WebDriverWait(driver, 5).until(
             EC.presence_of_element_located((By.CSS_SELECTOR, ".sud13-select-option:nth-child(1) .sud13-select-option__item-label"))
         )
 
@@ -209,7 +209,7 @@ def scrape_samsung_manual(model):
         driver.execute_script("window.scrollTo(0,320)")
 
         # Wait for download link
-        WebDriverWait(driver, 10).until(
+        WebDriverWait(driver, 5).until(
             EC.presence_of_element_located((By.LINK_TEXT, "Download"))
         )
 

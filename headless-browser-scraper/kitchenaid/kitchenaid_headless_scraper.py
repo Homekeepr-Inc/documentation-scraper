@@ -131,13 +131,13 @@ def scrape_kitchenaid_manual(model):
 
         # Open the conversion drawer
         try:
-            drawer_tab = WebDriverWait(driver, 10).until(
+            drawer_tab = WebDriverWait(driver, 5).until(
                 EC.element_to_be_clickable((By.CSS_SELECTOR, ".conversion-drawer-tab__open-close"))
             )
             drawer_tab.click()
             print("Opened drawer")
             # Wait for input field to be clickable after drawer opens
-            WebDriverWait(driver, 10).until(
+            WebDriverWait(driver, 5).until(
                 EC.element_to_be_clickable((By.CSS_SELECTOR, ".dpc-input"))
             )
         except Exception as e:
@@ -159,14 +159,14 @@ def scrape_kitchenaid_manual(model):
 
         # Wait for the model link to appear and click it
         try:
-            model_link = WebDriverWait(driver, 10).until(
+            model_link = WebDriverWait(driver, 5).until(
                 EC.element_to_be_clickable((By.LINK_TEXT, model))
             )
             print("Found model link, clicking")
             model_link.click()
             print("Clicked model link")
             # Wait for the model page to load
-            WebDriverWait(driver, 10).until(
+            WebDriverWait(driver, 5).until(
                 EC.presence_of_element_located((By.TAG_NAME, "body"))
             )
         except Exception as e:
@@ -175,7 +175,7 @@ def scrape_kitchenaid_manual(model):
             print("Trying fallback URL...")
             fallback_url = f"https://www.kitchenaid.com/owners-center-pdp.{model}.html"
             safe_driver_get(driver, fallback_url)
-            WebDriverWait(driver, 10).until(
+            WebDriverWait(driver, 5).until(
                 EC.presence_of_element_located((By.TAG_NAME, "body"))
             )
             result = scrape_from_page(driver, model, download_dir)
@@ -190,7 +190,7 @@ def scrape_kitchenaid_manual(model):
         print("Initial scrape failed, trying fallback URL...")
         fallback_url = f"https://www.kitchenaid.com/owners-center-pdp.{model}.html"
         safe_driver_get(driver, fallback_url)
-        WebDriverWait(driver, 10).until(
+        WebDriverWait(driver, 5).until(
             EC.presence_of_element_located((By.TAG_NAME, "body"))
         )
         result = scrape_from_page(driver, model, download_dir)
@@ -204,7 +204,7 @@ def scrape_kitchenaid_manual(model):
             print("Trying fallback URL due to error...")
             fallback_url = f"https://www.kitchenaid.com/owners-center-pdp.{model}.html"
             safe_driver_get(driver, fallback_url)
-            WebDriverWait(driver, 10).until(
+            WebDriverWait(driver, 5).until(
                 EC.presence_of_element_located((By.TAG_NAME, "body"))
             )
             result = scrape_from_page(driver, model, download_dir)

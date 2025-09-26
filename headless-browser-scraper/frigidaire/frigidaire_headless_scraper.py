@@ -51,13 +51,13 @@ def parse_manual_links(driver, model):
         print(f"Current URL: {driver.current_url}")
 
         # Wait for page to load
-        WebDriverWait(driver, 10).until(
+        WebDriverWait(driver, 5).until(
             EC.presence_of_element_located((By.TAG_NAME, "body"))
         )
 
         # Wait for manuals section to load
         try:
-            WebDriverWait(driver, 10).until(
+            WebDriverWait(driver, 5).until(
                 EC.presence_of_element_located((By.CSS_SELECTOR, ".manuals"))
             )
         except:
@@ -187,13 +187,13 @@ def scrape_frigidaire_manual(model):
         print(f"Current URL after navigation: {driver.current_url}")
 
         # Wait for page to load
-        WebDriverWait(driver, 10).until(
+        WebDriverWait(driver, 5).until(
             EC.presence_of_element_located((By.TAG_NAME, "body"))
         )
 
         # Wait for manuals section to load
         try:
-            WebDriverWait(driver, 10).until(
+            WebDriverWait(driver, 5).until(
                 EC.presence_of_element_located((By.CSS_SELECTOR, ".manuals"))
             )
         except:
@@ -233,12 +233,12 @@ def scrape_frigidaire_manual(model):
         print(f"Search page URL: {driver.current_url}")
 
         # Wait for page to load
-        WebDriverWait(driver, 10).until(
+        WebDriverWait(driver, 5).until(
             EC.presence_of_element_located((By.TAG_NAME, "body"))
         )
 
         # Click search input
-        search_input = WebDriverWait(driver, 10).until(
+        search_input = WebDriverWait(driver, 5).until(
             EC.element_to_be_clickable((By.CSS_SELECTOR, ".form-control"))
         )
         search_input.click()
@@ -248,7 +248,7 @@ def scrape_frigidaire_manual(model):
         search_input.send_keys(model)
 
         # Click search button
-        search_button = WebDriverWait(driver, 10).until(
+        search_button = WebDriverWait(driver, 5).until(
             EC.element_to_be_clickable((By.CSS_SELECTOR, ".fa"))
         )
         search_button.click()
@@ -266,7 +266,7 @@ def scrape_frigidaire_manual(model):
 
         # Click product image
         try:
-            product_image = WebDriverWait(driver, 10).until(
+            product_image = WebDriverWait(driver, 5).until(
                 EC.element_to_be_clickable((By.CSS_SELECTOR, ".cx-product-image > img"))
             )
             # Use JavaScript click to avoid interception
@@ -290,7 +290,7 @@ def scrape_frigidaire_manual(model):
             print(f"No modal to close or close failed: {e}")
 
         # Click "Complete Owner's Guide"
-        owners_guide_link = WebDriverWait(driver, 10).until(
+        owners_guide_link = WebDriverWait(driver, 5).until(
             EC.element_to_be_clickable((By.LINK_TEXT, "Complete Owner's Guide"))
         )
 
