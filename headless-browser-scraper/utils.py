@@ -67,7 +67,7 @@ def get_chrome_options(download_dir=None):
     return options
 
 
-def safe_driver_get(driver, url, timeout=10):
+def safe_driver_get(driver, url, timeout=15):
     """
     Safely navigate to a URL with a page load timeout.
 
