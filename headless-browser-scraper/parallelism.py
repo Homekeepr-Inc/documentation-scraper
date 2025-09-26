@@ -11,7 +11,7 @@ import threading
 import uuid
 from typing import Dict, Any, Optional
 
-parallelism_count = 2
+parallelism_count = 1
 # Global queue for all scraper jobs
 job_queue = queue.Queue()
 
