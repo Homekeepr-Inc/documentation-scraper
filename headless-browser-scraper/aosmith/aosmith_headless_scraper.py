@@ -85,7 +85,7 @@ def aosmith_fallback_callback(driver):
             )
             literature_text = driver.find_element(By.CSS_SELECTOR, ".support-link--literature > .support-link__text")
             literature_text.click()
-            time.sleep(1)
+            time.sleep(0.2)
 
             # Then click the Manual link
             WebDriverWait(driver, 5).until(
@@ -106,7 +106,7 @@ def aosmith_fallback_callback(driver):
             )
             tab_c = driver.find_element(By.ID, "tab-C")
             ActionChains(driver).move_to_element(tab_c).click().perform()
-            time.sleep(2)  # Wait for content to load
+            time.sleep(0.2)
             driver.execute_script("window.scrollTo(0,50)")  # Scroll a bit more
 
             # Find and click a manual link (look for link containing "Manual")
@@ -155,7 +155,7 @@ def fallback_scrape(model):
         print(f"Primary scraping failed for {model}, trying fallback on hotwater.com...")
         # Search DuckDuckGo for the model
         safe_driver_get(driver, f"https://duckduckgo.com/?q={model}")
-        time.sleep(random.uniform(0.5, 1.0))
+        time.sleep(0.2)
 
         # Wait for search results
         WebDriverWait(driver, 5).until(
@@ -177,7 +177,7 @@ def fallback_scrape(model):
 
         # Click the trusted link
         trusted_link.click()
-        time.sleep(random.uniform(0.5, 1.0))
+        time.sleep(0.2)
 
         # Now on the hotwater.com page, call the callback
         result = aosmith_fallback_callback(driver)

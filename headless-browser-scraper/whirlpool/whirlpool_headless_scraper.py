@@ -66,12 +66,12 @@ def fallback_scrape(driver, model, search_url, download_dir):
 
             # Scroll to element and use JavaScript click to avoid interception
             driver.execute_script("arguments[0].scrollIntoView();", manual_link)
-            time.sleep(0.5)
+            time.sleep(0.2)
             driver.execute_script("arguments[0].click();", manual_link)
 
             # Wait for download to complete (check for new PDF files)
             print("Waiting for download to complete...")
-            time.sleep(random.uniform(4.0, 6.0))  # Wait a bit for download to start
+            time.sleep(0.2)
 
             files_after = set(os.listdir(download_dir))
             new_files = files_after - files_before
@@ -162,12 +162,12 @@ def scrape_whirlpool_manual(model):
 
             # Scroll to element and use JavaScript click to avoid interception
             driver.execute_script("arguments[0].scrollIntoView();", owners_manual_link)
-            time.sleep(0.5)
+            time.sleep(0.2)
             driver.execute_script("arguments[0].click();", owners_manual_link)
 
             # Wait for download to complete (check for new PDF files)
             print("Waiting for download to complete...")
-            time.sleep(random.uniform(4.0, 6.0))  # Wait a bit for download to start
+            time.sleep(0.2)
 
             files_after = set(os.listdir(download_dir))
             new_files = files_after - files_before

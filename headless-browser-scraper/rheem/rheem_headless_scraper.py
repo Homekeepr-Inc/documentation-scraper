@@ -47,9 +47,9 @@ def rheem_rheem_callback(driver, model):
         # Scroll down
         print("Scrolling to documentation section...")
         driver.execute_script("window.scrollTo(0,142)")
-        time.sleep(0.5)
+        time.sleep(0.2)
         driver.execute_script("window.scrollTo(0,592)")
-        time.sleep(0.5)
+        time.sleep(0.2)
         print("Scrolled.")
 
         # Click the "Documentation" accordion button
@@ -60,9 +60,9 @@ def rheem_rheem_callback(driver, model):
             )
             accordion_button = driver.find_element(By.XPATH, "//button[text()='Documentation']")
             driver.execute_script("arguments[0].scrollIntoView();", accordion_button)
-            time.sleep(0.5)
+            time.sleep(0.2)
             driver.execute_script("arguments[0].click();", accordion_button)
-            time.sleep(1)
+            time.sleep(0.2)
             print("'Documentation' accordion expanded.")
         except Exception as e:
             print(f"Failed to find or click 'Documentation' button: {e}")
@@ -87,7 +87,7 @@ def rheem_rheem_callback(driver, model):
             WebDriverWait(driver, 5).until(lambda d: len(d.window_handles) > 1)
             new_window = [h for h in driver.window_handles if h != driver.current_window_handle][0]
             driver.switch_to.window(new_window)
-            time.sleep(1)
+            time.sleep(0.2)
             print("Switched to new window.")
         except Exception as e:
             print(f"Failed to wait for or switch to new window: {e}")
@@ -103,7 +103,7 @@ def rheem_rheem_callback(driver, model):
             file_url = download_link.get_attribute("href")
             title = download_link.text or "Rheem Use and Care Manual"
             download_link.click()
-            time.sleep(2)
+            time.sleep(0.2)
             print("Clicked second link, download triggered.")
         except Exception as e:
             print(f"No second link found, assuming PDF opened directly: {e}")
@@ -150,9 +150,9 @@ def rheem_homedepot_callback(driver, model):
         # Scroll down to load content
         print("Scrolling to load content...")
         driver.execute_script("window.scrollTo(0,500)")
-        time.sleep(1)
+        time.sleep(0.2)
         driver.execute_script("window.scrollTo(0,1000)")
-        time.sleep(1)
+        time.sleep(0.2)
         print("Scrolled to content area.")
 
         # Click "Product Details" to expand
@@ -164,11 +164,11 @@ def rheem_homedepot_callback(driver, model):
             product_details = driver.find_element(By.XPATH, "//h3[contains(text(), 'Product Details')]")
             print("Found 'Product Details', scrolling into view...")
             driver.execute_script("arguments[0].scrollIntoView();", product_details)
-            time.sleep(0.5)
+            time.sleep(0.2)
             print("Clicking 'Product Details' with JS...")
             driver.execute_script("arguments[0].click();", product_details)
             print("Clicked 'Product Details', waiting for content to load...")
-            time.sleep(5)  # Wait for JS to load the manual link
+            time.sleep(0.2)
         except Exception as e:
             print(f"Failed to find or click 'Product Details': {e}")
             return None
@@ -198,7 +198,7 @@ def rheem_homedepot_callback(driver, model):
         print(f"Navigating to manual link: {title}")
         safe_driver_get(driver, file_url)
 
-        time.sleep(5)  # Wait for download or new window
+        time.sleep(0.2)
         print("Waited 5 seconds after navigation.")
 
         # Check if new window opened
@@ -243,7 +243,7 @@ def rheem_supplyhouse_callback(driver, model):
         # Scroll down to load content
         print("Scrolling to load content...")
         driver.execute_script("window.scrollTo(0, 500)")
-        time.sleep(0.5)
+        time.sleep(0.2)
         print("Scrolled.")
 
         # Mouse over the first element
@@ -252,7 +252,7 @@ def rheem_supplyhouse_callback(driver, model):
             element = driver.find_element(By.CSS_SELECTOR, ".kNBVuQ > .Box-sc-1z9git-0:nth-child(1) .dBGvTK")
             actions = ActionChains(driver)
             actions.move_to_element(element).perform()
-            time.sleep(0.5)
+            time.sleep(0.2)
             print("Hovered over first element.")
         except Exception as e:
             print(f"Failed to find or hover first element: {e}")
@@ -275,7 +275,7 @@ def rheem_supplyhouse_callback(driver, model):
             WebDriverWait(driver, 5).until(lambda d: len(d.window_handles) > 1)
             new_window = [h for h in driver.window_handles if h != driver.current_window_handle][0]
             driver.switch_to.window(new_window)
-            time.sleep(1)
+            time.sleep(0.2)
             print("Switched to new window.")
         except Exception as e:
             print(f"Failed to wait for or switch to new window: {e}")

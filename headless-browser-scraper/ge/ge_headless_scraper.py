@@ -59,7 +59,7 @@ def scrape_ge_manual(model):
         WebDriverWait(driver, 5).until(
             EC.presence_of_element_located((By.TAG_NAME, "body"))
         )
-        time.sleep(2)
+        time.sleep(0.2)
 
         # Get the page source and parse it
         page_source = driver.page_source
@@ -75,20 +75,20 @@ def scrape_ge_manual(model):
 
             # Wait for the search results to load and re-parse the page
             WebDriverWait(driver, 5).until(EC.presence_of_element_located((By.TAG_NAME, "body")))
-            time.sleep(2)
+            time.sleep(0.2)
             page_source = driver.page_source
             soup = BeautifulSoup(page_source, 'html.parser')
 
             # Handle cookie consent if present
             try:
                 driver.find_element(By.CSS_SELECTOR, ".onetrust-pc-dark-filter").click()
-                time.sleep(1)
+                time.sleep(0.2)
                 driver.switch_to.frame(4)
                 driver.find_element(By.CSS_SELECTOR, ".mat-mdc-button-touch-target").click()
                 driver.switch_to.default_content()
                 driver.find_element(By.ID, "onetrust-pc-btn-handler").click()
                 driver.find_element(By.CSS_SELECTOR, ".save-preference-btn-handler").click()
-                time.sleep(1)
+                time.sleep(0.2)
             except Exception as e:
                 print(f"Cookie handling skipped or failed: {e}")
 
@@ -113,7 +113,7 @@ def scrape_ge_manual(model):
                     print(f"Navigated to variant: {driver.current_url}")
                     # Wait and re-parse
                     WebDriverWait(driver, 5).until(EC.presence_of_element_located((By.TAG_NAME, "body")))
-                    time.sleep(2)
+                    time.sleep(0.2)
                     page_source = driver.page_source
                     soup = BeautifulSoup(page_source, 'html.parser')
                     # Now find Owner's Manual link on this page
@@ -125,7 +125,7 @@ def scrape_ge_manual(model):
                         print(f"Navigated to manual: {driver.current_url}")
                         # Wait and re-parse
                         WebDriverWait(driver, 5).until(EC.presence_of_element_located((By.TAG_NAME, "body")))
-                        time.sleep(2)
+                        time.sleep(0.2)
                         page_source = driver.page_source
                         soup = BeautifulSoup(page_source, 'html.parser')
                     else:
@@ -148,7 +148,7 @@ def scrape_ge_manual(model):
                             print(f"Navigated to manual: {driver.current_url}")
                             # Wait and re-parse
                             WebDriverWait(driver, 5).until(EC.presence_of_element_located((By.TAG_NAME, "body")))
-                            time.sleep(2)
+                            time.sleep(0.2)
                             page_source = driver.page_source
                             soup = BeautifulSoup(page_source, 'html.parser')
                         else:
@@ -161,7 +161,7 @@ def scrape_ge_manual(model):
                                 print(f"Navigated to variant: {driver.current_url}")
                                 # Wait and re-parse
                                 WebDriverWait(driver, 5).until(EC.presence_of_element_located((By.TAG_NAME, "body")))
-                                time.sleep(2)
+                                time.sleep(0.2)
                                 page_source = driver.page_source
                                 soup = BeautifulSoup(page_source, 'html.parser')
                                 # Now find Owner's Manual link on this page
@@ -173,7 +173,7 @@ def scrape_ge_manual(model):
                                     print(f"Navigated to manual: {driver.current_url}")
                                     # Wait and re-parse
                                     WebDriverWait(driver, 5).until(EC.presence_of_element_located((By.TAG_NAME, "body")))
-                                    time.sleep(2)
+                                    time.sleep(0.2)
                                     page_source = driver.page_source
                                     soup = BeautifulSoup(page_source, 'html.parser')
                                 else:

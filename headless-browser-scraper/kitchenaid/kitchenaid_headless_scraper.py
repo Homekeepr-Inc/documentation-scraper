@@ -70,7 +70,7 @@ def scrape_from_page(driver, model, download_dir):
                 else:
                     stable_count = 0
                 initial_size = size
-            time.sleep(1)
+            time.sleep(0.2)
         else:
             print("Download did not stabilize within 30 seconds")
             return None

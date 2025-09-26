@@ -160,7 +160,7 @@ def duckduckgo_fallback(driver, model, host_url, scrape_callback, search_query=N
         # Otherwise, click the link to navigate to the page
         try:
             trusted_link.click()
-            time.sleep(random.uniform(0.5, 1.0))
+            time.sleep(0.2)
             print(f"Navigated to: {driver.current_url}")
             # Call the brand-specific scraping callback.
             return scrape_callback(driver)
@@ -248,7 +248,7 @@ def wait_for_download(download_dir, timeout=30):
             # Return the most recently modified PDF.
             pdf_files.sort(key=lambda x: os.path.getmtime(os.path.join(download_dir, x)), reverse=True)
             return os.path.join(download_dir, pdf_files[0])
-        time.sleep(0.5)
+        time.sleep(0.2)
 
     return None
 

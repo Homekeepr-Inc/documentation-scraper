@@ -62,11 +62,11 @@ def parse_manual_links(driver, model):
             )
         except:
             print("Manuals section not found, waiting additional time...")
-            time.sleep(5)
+            time.sleep(0.2)
 
         # Scroll to load lazy content
         driver.execute_script("window.scrollTo(0, document.body.scrollHeight);")
-        time.sleep(2)
+        time.sleep(0.2)
 
         # Get page source and parse
         page_source = driver.page_source
@@ -198,11 +198,11 @@ def scrape_frigidaire_manual(model):
             )
         except:
             print("Manuals section not found, waiting additional time...")
-            time.sleep(5)
+            time.sleep(0.2)
 
         # Scroll to load lazy content
         driver.execute_script("window.scrollTo(0, document.body.scrollHeight);")
-        time.sleep(2)
+        time.sleep(0.2)
 
         print(f"Current URL after page load: {driver.current_url}")
         print(f"Looking for 'owner-center': {'owner-center' in driver.current_url}")
