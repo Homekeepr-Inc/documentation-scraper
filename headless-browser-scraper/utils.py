@@ -112,7 +112,6 @@ def duckduckgo_fallback(driver, model, host_url, scrape_callback, search_query=N
         if search_query is None:
             search_query = f"{model} owner's manual site:{host_url}"
         safe_driver_get(driver, f"https://duckduckgo.com/?q={search_query}")
-        time.sleep(random.uniform(0.5, 1.0))
 
         print(f"DuckDuckGo search loaded for: {search_query}")
 
