@@ -53,9 +53,8 @@ def get_chrome_options(download_dir=None):
         options.add_argument(f'--proxy-server={PROXY_URL}')
         print(f"Using proxy server {PROXY_URL}")
     else:
-        print("**NO PROXY CONFIGURED**")
-        # Fallback to TinyProxy if env not set (though Compose sets it)
-        options.add_argument(f'--proxy-server={tinyproxy_proxy}')
+        print("**NO PROXY CONFIGURED** - running without proxy")
+        # For local testing, don't set proxy
     if download_dir:
         options.add_experimental_option("prefs", {
             "download.default_directory": download_dir,
@@ -142,13 +141,19 @@ def duckduckgo_fallback(driver, model, host_url, scrape_callback, search_query=N
             return None
 
         # Otherwise, click the link to navigate to the page
-        trusted_link.click()
-        time.sleep(random.uniform(0.5, 1.0))
-
-        print(f"Navigated to: {driver.current_url}")
-
-        # Call the brand-specific scraping callback.
-        return scrape_callback(driver)
+        try:
+            trusted_link.click()
+            time.sleep(random.uniform(0.5, 1.0))
+            print(f"Navigated to: {driver.current_url}")
+            # Call the brand-specific scraping callback.
+            return scrape_callback(driver)
+        except Exception as e:
+            print(f"Navigation failed: {e}, attempting callback anyway on current page")
+            try:
+                return scrape_callback(driver)
+            except Exception as e2:
+                print(f"Callback failed anyway: {e2}")
+                return None
 
     except Exception as e:
         print(f"DuckDuckGo fallback failed: {e}")

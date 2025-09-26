@@ -102,6 +102,11 @@ def rheem_homedepot_callback(driver, model):
     Callback function for Rheem scraping on homedepot.com after navigating to the product page via DuckDuckGo.
     """
     try:
+        # Wait for page to load
+        WebDriverWait(driver, 10).until(
+            EC.presence_of_element_located((By.TAG_NAME, 'body'))
+        )
+
         # Check if the model number is present on the page
         if model.lower() not in driver.page_source.lower():
             print(f"Model {model} not found on the page.")
