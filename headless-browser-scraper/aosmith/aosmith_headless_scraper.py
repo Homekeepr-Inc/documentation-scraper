@@ -26,7 +26,7 @@ sys.path.append(os.path.join(os.path.dirname(__file__), '..', '..'))  # project 
 sys.path.append(os.path.join(os.path.dirname(__file__), '..'))  # headless-browser-scraper
 
 # Import utility functions
-from utils import safe_driver_get, wait_for_download, validate_pdf_file, validate_and_ingest_manual, create_temp_download_dir, cleanup_temp_dir, duckduckgo_fallback
+from utils import safe_driver_get, wait_for_download, validate_pdf_file, validate_and_ingest_manual, create_temp_download_dir, cleanup_temp_dir, duckduckgo_fallback, get_chrome_options, create_chrome_driver
 
 
 def aosmith_scrape_callback(driver):
@@ -38,7 +38,7 @@ def aosmith_scrape_callback(driver):
         driver.execute_script("window.scrollTo(0,192)")
 
         # Find the Owners Manual link directly
-        WebDriverWait(driver, 10).until(
+        WebDriverWait(driver, 5).until(
             EC.presence_of_element_located((By.CSS_SELECTOR, "a[title*='Owners Manual']"))
         )
         manual_link = driver.find_element(By.CSS_SELECTOR, "a[title*='Owners Manual']")
@@ -80,15 +80,15 @@ def aosmith_fallback_callback(driver):
 
         if is_discontinued:
             # For discontinued products, click the literature link text
-            WebDriverWait(driver, 10).until(
+            WebDriverWait(driver, 5).until(
                 EC.element_to_be_clickable((By.CSS_SELECTOR, ".support-link--literature > .support-link__text"))
             )
             literature_text = driver.find_element(By.CSS_SELECTOR, ".support-link--literature > .support-link__text")
             literature_text.click()
-            time.sleep(1)
+            time.sleep(0.2)
 
             # Then click the Manual link
-            WebDriverWait(driver, 10).until(
+            WebDriverWait(driver, 5).until(
                 EC.element_to_be_clickable((By.LINK_TEXT, "Manual"))
             )
             manual_link = driver.find_element(By.LINK_TEXT, "Manual")
@@ -101,12 +101,12 @@ def aosmith_fallback_callback(driver):
         else:
             # Normal flow for active products
             # Click the "Product Literature" tab
-            WebDriverWait(driver, 10).until(
+            WebDriverWait(driver, 5).until(
                 EC.element_to_be_clickable((By.ID, "tab-C"))
             )
             tab_c = driver.find_element(By.ID, "tab-C")
             ActionChains(driver).move_to_element(tab_c).click().perform()
-            time.sleep(2)  # Wait for content to load
+            time.sleep(0.2)
             driver.execute_script("window.scrollTo(0,50)")  # Scroll a bit more
 
             # Find and click a manual link (look for link containing "Manual")
@@ -124,7 +124,7 @@ def aosmith_fallback_callback(driver):
             manual_link.click()
 
             # Wait for new window and switch
-            WebDriverWait(driver, 10).until(lambda d: len(d.window_handles) > 1)
+            WebDriverWait(driver, 5).until(lambda d: len(d.window_handles) > 1)
             new_window = [h for h in driver.window_handles if h != driver.current_window_handle][0]
             driver.switch_to.window(new_window)
 
@@ -144,33 +144,21 @@ def fallback_scrape(model):
     """
     Fallback scraping mechanism for A.O. Smith manuals on hotwater.com.
     """
-    options = uc.ChromeOptions()
-    options.add_argument('--headless')
-    options.add_argument('--disable-dev-shm-usage')
-    options.add_argument('--disable-gpu')
-    options.add_argument('--window-size=1920,1080')
-    options.add_argument('--user-agent=Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36')
-
     # Set download preferences
     temp_dir = create_temp_download_dir()
     download_dir = temp_dir
-    options.add_experimental_option("prefs", {
-        "download.default_directory": download_dir,
-        "download.prompt_for_download": False,
-        "download.directory_upgrade": True,
-        "plugins.always_open_pdf_externally": True
-    })
+    options = get_chrome_options(download_dir)
 
-    driver = uc.Chrome(options=options)
+    driver = create_chrome_driver(options=options)
 
     try:
         print(f"Primary scraping failed for {model}, trying fallback on hotwater.com...")
         # Search DuckDuckGo for the model
         safe_driver_get(driver, f"https://duckduckgo.com/?q={model}")
-        time.sleep(random.uniform(0.5, 1.0))
+        time.sleep(0.2)
 
         # Wait for search results
-        WebDriverWait(driver, 10).until(
+        WebDriverWait(driver, 5).until(
             EC.presence_of_element_located((By.CSS_SELECTOR, "a[data-testid='result-title-a']"))
         )
 
@@ -189,7 +177,7 @@ def fallback_scrape(model):
 
         # Click the trusted link
         trusted_link.click()
-        time.sleep(random.uniform(0.5, 1.0))
+        time.sleep(0.2)
 
         # Now on the hotwater.com page, call the callback
         result = aosmith_fallback_callback(driver)
@@ -238,24 +226,12 @@ def scrape_aosmith_manual(model):
     normalized_model = model.replace('/', '_')
 
     # Launch undetected Chrome
-    options = uc.ChromeOptions()
-    options.add_argument('--headless')
-    options.add_argument('--disable-dev-shm-usage')
-    options.add_argument('--disable-gpu')
-    options.add_argument('--window-size=1920,1080')
-    options.add_argument('--user-agent=Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36')
-
     # Set download preferences
     temp_dir = create_temp_download_dir()
     download_dir = temp_dir
-    options.add_experimental_option("prefs", {
-        "download.default_directory": download_dir,
-        "download.prompt_for_download": False,
-        "download.directory_upgrade": True,
-        "plugins.always_open_pdf_externally": True
-    })
+    options = get_chrome_options(download_dir)
 
-    driver = uc.Chrome(options=options)
+    driver = create_chrome_driver(options=options)
 
     try:
         print(f"Attempting DuckDuckGo fallback for A.O. Smith model {model}...")

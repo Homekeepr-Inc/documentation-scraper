@@ -25,7 +25,7 @@ import requests
 
 # Import utility functions
 sys.path.append(os.path.dirname(__file__))
-from utils import safe_driver_get, validate_and_ingest_manual, create_temp_download_dir, cleanup_temp_dir
+from utils import safe_driver_get, validate_and_ingest_manual, create_temp_download_dir, cleanup_temp_dir, get_chrome_options, create_chrome_driver
 
 # Add project root to sys.path
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
@@ -44,7 +44,7 @@ def fallback_scrape(driver, model, search_url, download_dir):
         print(f"Navigated to direct URL: {direct_url}")
 
         # Wait for page to load
-        WebDriverWait(driver, 10).until(
+        WebDriverWait(driver, 5).until(
             EC.presence_of_element_located((By.TAG_NAME, "body"))
         )
         print("Direct page loaded.")
@@ -53,7 +53,7 @@ def fallback_scrape(driver, model, search_url, download_dir):
         try:
             print("Searching for Owner's Manual link using data-doc-type")
             # Look for the div with data-doc-type='owners-manual' and get the a inside it
-            manual_link = WebDriverWait(driver, 10).until(
+            manual_link = WebDriverWait(driver, 5).until(
                 EC.presence_of_element_located((By.XPATH, "//div[@data-doc-type='owners-manual']//a"))
             )
             print("Found owner's manual document link.")
@@ -66,12 +66,12 @@ def fallback_scrape(driver, model, search_url, download_dir):
 
             # Scroll to element and use JavaScript click to avoid interception
             driver.execute_script("arguments[0].scrollIntoView();", manual_link)
-            time.sleep(0.5)
+            time.sleep(0.2)
             driver.execute_script("arguments[0].click();", manual_link)
 
             # Wait for download to complete (check for new PDF files)
             print("Waiting for download to complete...")
-            time.sleep(random.uniform(4.0, 6.0))  # Wait a bit for download to start
+            time.sleep(0.2)
 
             files_after = set(os.listdir(download_dir))
             new_files = files_after - files_before
@@ -121,25 +121,12 @@ def scrape_whirlpool_manual(model):
     """
     search_url = f"https://www.whirlpool.com/results.html?term={model}"
     print(f"Fetching page for model {model}...")
-    options = uc.ChromeOptions()
-    options.add_argument('--headless')
-    options.add_argument('--disable-dev-shm-usage')
-    options.add_argument('--disable-gpu')
-    options.add_argument('--window-size=1920,1080')
-    options.add_argument('--disable-popup-blocking')
-    options.add_argument('--user-agent=Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36')
-
     # Set download preferences
     temp_dir = create_temp_download_dir()
     download_dir = temp_dir
-    options.add_experimental_option("prefs", {
-        "download.default_directory": download_dir,
-        "download.prompt_for_download": False,
-        "download.directory_upgrade": True,
-        "plugins.always_open_pdf_externally": True
-    })
+    options = get_chrome_options(download_dir)
 
-    driver = uc.Chrome(options=options)
+    driver = create_chrome_driver(options=options)
     try:
         print(f"Navigating to: {search_url}")
         safe_driver_get(driver, search_url)
@@ -147,7 +134,7 @@ def scrape_whirlpool_manual(model):
 
         # Wait for page to load
         print("Waiting for page elements to load...")
-        WebDriverWait(driver, 10).until(
+        WebDriverWait(driver, 5).until(
             EC.presence_of_element_located((By.CLASS_NAME, "clp-item-link"))
         )
         print("Page loaded successfully.")
@@ -175,12 +162,12 @@ def scrape_whirlpool_manual(model):
 
             # Scroll to element and use JavaScript click to avoid interception
             driver.execute_script("arguments[0].scrollIntoView();", owners_manual_link)
-            time.sleep(0.5)
+            time.sleep(0.2)
             driver.execute_script("arguments[0].click();", owners_manual_link)
 
             # Wait for download to complete (check for new PDF files)
             print("Waiting for download to complete...")
-            time.sleep(random.uniform(4.0, 6.0))  # Wait a bit for download to start
+            time.sleep(0.2)
 
             files_after = set(os.listdir(download_dir))
             new_files = files_after - files_before

@@ -1,0 +1,10 @@
+{
+    # This is a global option block.
+    # By default, Caddy will use Let's Encrypt for public domains
+    # and its own internal CA for local/private domains (like localhost).
+}
+
+{$DOMAIN_NAME} {
+    {$TLS_DIRECTIVE}
+    reverse_proxy app:8000
+}

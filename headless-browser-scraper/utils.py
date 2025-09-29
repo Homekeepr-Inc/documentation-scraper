@@ -22,11 +22,69 @@ import requests
 import tempfile
 import shutil
 
-# Import config for BLOB_ROOT
-from app.config import DEFAULT_BLOB_ROOT
+# Import config for BLOB_ROOT and PROXY_URL
+from app.config import DEFAULT_BLOB_ROOT, PROXY_URL
 
 
-def safe_driver_get(driver, url, timeout=10):
+def get_chrome_options(download_dir=None):
+    """
+    Get ChromeOptions with common settings, proxy if configured, and download preferences if download_dir provided.
+
+    Args:
+        download_dir (str, optional): Directory for downloads. If provided, sets download preferences.
+
+    Returns:
+        uc.ChromeOptions: Configured Chrome options
+    """
+    options = uc.ChromeOptions()
+    options.add_argument('--headless')
+    options.add_argument('--disable-dev-shm-usage')
+    options.add_argument('--disable-gpu')
+    options.add_argument('--window-size=1280,720')
+    options.add_argument('--disable-popup-blocking')
+    options.add_argument('--disable-images')
+    options.add_argument('--disable-plugins')
+    options.add_argument('--disable-extensions')
+    options.add_argument('--user-agent=Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36')
+
+    # Use TinyProxy proxy (unauthenticated local proxy forwarding to Rayobyte)
+    tinyproxy_proxy = "http://tinyproxy:8888"  # Hardcode for clarity; matches Docker Compose env
+    if PROXY_URL:
+        options.add_argument(f'--proxy-server={PROXY_URL}')
+        print(f"Using proxy server {PROXY_URL}")
+    else:
+        print("**NO PROXY CONFIGURED** - running without proxy")
+        # For local testing, don't set proxy
+    if download_dir:
+        options.add_experimental_option("prefs", {
+            "download.default_directory": download_dir,
+            "download.prompt_for_download": False,
+            "download.directory_upgrade": True,
+            "plugins.always_open_pdf_externally": True
+        })
+
+    return options
+
+
+def create_chrome_driver(options=None, download_dir=None):
+    """
+    Create a Chrome driver using undetected-chromedriver with system chromedriver to avoid download concurrency.
+
+    Args:
+        options (uc.ChromeOptions, optional): Chrome options. If None, uses get_chrome_options().
+        download_dir (str, optional): Download directory for options.
+
+    Returns:
+        uc.Chrome: Chrome driver instance
+    """
+    if options is None:
+        options = get_chrome_options(download_dir)
+    # Use system chromedriver to avoid undetected's download
+    driver_executable_path = '/usr/bin/chromedriver'
+    return uc.Chrome(options=options, driver_executable_path=driver_executable_path)
+
+
+def safe_driver_get(driver, url, timeout=15):
     """
     Safely navigate to a URL with a page load timeout.
 
@@ -72,12 +130,11 @@ def duckduckgo_fallback(driver, model, host_url, scrape_callback, search_query=N
         if search_query is None:
             search_query = f"{model} owner's manual site:{host_url}"
         safe_driver_get(driver, f"https://duckduckgo.com/?q={search_query}")
-        time.sleep(random.uniform(0.5, 1.0))
 
         print(f"DuckDuckGo search loaded for: {search_query}")
 
         # Wait for search results to appear.
-        WebDriverWait(driver, 10).until(
+        WebDriverWait(driver, 5).until(
             EC.presence_of_element_located((By.CSS_SELECTOR, "a[data-testid='result-title-a']"))
         )
 
@@ -101,13 +158,19 @@ def duckduckgo_fallback(driver, model, host_url, scrape_callback, search_query=N
             return None
 
         # Otherwise, click the link to navigate to the page
-        trusted_link.click()
-        time.sleep(random.uniform(0.5, 1.0))
-
-        print(f"Navigated to: {driver.current_url}")
-
-        # Call the brand-specific scraping callback.
-        return scrape_callback(driver)
+        try:
+            trusted_link.click()
+            time.sleep(0.2)
+            print(f"Navigated to: {driver.current_url}")
+            # Call the brand-specific scraping callback.
+            return scrape_callback(driver)
+        except Exception as e:
+            print(f"Navigation failed: {e}, attempting callback anyway on current page")
+            try:
+                return scrape_callback(driver)
+            except Exception as e2:
+                print(f"Callback failed anyway: {e2}")
+                return None
 
     except Exception as e:
         print(f"DuckDuckGo fallback failed: {e}")
@@ -185,7 +248,7 @@ def wait_for_download(download_dir, timeout=30):
             # Return the most recently modified PDF.
             pdf_files.sort(key=lambda x: os.path.getmtime(os.path.join(download_dir, x)), reverse=True)
             return os.path.join(download_dir, pdf_files[0])
-        time.sleep(0.5)
+        time.sleep(0.2)
 
     return None
 

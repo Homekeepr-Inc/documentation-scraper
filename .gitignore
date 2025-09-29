@@ -1,6 +1,8 @@
 *.pdf
 data/storage/*
 .DS_Store
+*.pem
+squid.conf
 
 # Byte-compiled / optimized / DLL files
 __pycache__/

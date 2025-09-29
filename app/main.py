@@ -33,6 +33,8 @@ app = FastAPI(title="Appliance Manuals API")
 
 # Custom header secret for API protection
 SCRAPER_SECRET = os.getenv("SCRAPER_SECRET")
+if SCRAPER_SECRET == None or SCRAPER_SECRET == "":
+    raise ValueError("**Security Violation**: SCRAPER_SECRET is an empty string or null!")
 
 @app.middleware("http")
 async def check_custom_header(request: Request, call_next):
@@ -153,7 +155,7 @@ async def scrape_brand_model(brand: str, model: str):
     result = get_job_result(job_id)
 
     if isinstance(result, Exception):
-        raise HTTPException(status_code=500, detail=f"Scraping failed: {result}")
+        raise HTTPException(status_code=500, detail=f"Scraping failed.")
 
 
     if not result:

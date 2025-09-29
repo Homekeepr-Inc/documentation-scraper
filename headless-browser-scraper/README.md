@@ -36,6 +36,15 @@ To prevent race conditions between concurrent scraping jobs, each scraper uses i
 
 This approach ensures reliable cleanup while preventing premature deletion of files still being processed by other jobs.
 
+## Configuration
+
+### Proxy Settings
+
+All headless browser scrapers are automatically proxied using `proxychains-ng` when run inside the Docker container. The proxy is configured via the `proxychains.conf` file and the `PROXY_URL` environment variable.
+
+- **Transparent proxying**: No code changes are needed to use the proxy.
+- **Configuration**: The proxy is configured in the `Dockerfile` and `docker-compose.yml`.
+
 ## Conventions to Follow (Important!)
 To ensure timeliness and robustness, we have a few utility functions which should be used in certain circumstances:
 - Never using `print()` calls in loops as they can slow down execution by _many_ orders of magnitude. Progress `print()` calls are fine.

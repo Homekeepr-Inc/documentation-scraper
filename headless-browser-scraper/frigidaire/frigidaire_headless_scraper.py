@@ -32,7 +32,7 @@ from app.config import DEFAULT_BLOB_ROOT
 
 # Import utility functions
 sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
-from utils import duckduckgo_fallback, validate_pdf_file, wait_for_download, safe_driver_get, validate_and_ingest_manual
+from utils import duckduckgo_fallback, validate_pdf_file, wait_for_download, safe_driver_get, validate_and_ingest_manual, get_chrome_options, create_chrome_driver
 
 
 def parse_manual_links(driver, model):
@@ -51,22 +51,22 @@ def parse_manual_links(driver, model):
         print(f"Current URL: {driver.current_url}")
 
         # Wait for page to load
-        WebDriverWait(driver, 10).until(
+        WebDriverWait(driver, 5).until(
             EC.presence_of_element_located((By.TAG_NAME, "body"))
         )
 
         # Wait for manuals section to load
         try:
-            WebDriverWait(driver, 10).until(
+            WebDriverWait(driver, 5).until(
                 EC.presence_of_element_located((By.CSS_SELECTOR, ".manuals"))
             )
         except:
             print("Manuals section not found, waiting additional time...")
-            time.sleep(5)
+            time.sleep(0.2)
 
         # Scroll to load lazy content
         driver.execute_script("window.scrollTo(0, document.body.scrollHeight);")
-        time.sleep(2)
+        time.sleep(0.2)
 
         # Get page source and parse
         page_source = driver.page_source
@@ -174,25 +174,12 @@ def scrape_frigidaire_manual(model):
     direct_url = f"https://www.frigidaire.com/en/p/owner-center/product-support/{model}"
 
     # Launch undetected Chrome
-    options = uc.ChromeOptions()
-    options.add_argument('--headless')
-    options.add_argument('--disable-dev-shm-usage')
-    options.add_argument('--disable-gpu')
-    options.add_argument('--window-size=1920,1080')
-    options.add_argument('--disable-popup-blocking')
-    options.add_argument('--user-agent=Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36')
-
     # Set download preferences
     download_dir = os.path.abspath(DEFAULT_BLOB_ROOT)
     os.makedirs(download_dir, exist_ok=True)
-    options.add_experimental_option("prefs", {
-        "download.default_directory": download_dir,
-        "download.prompt_for_download": False,
-        "download.directory_upgrade": True,
-        "plugins.always_open_pdf_externally": True
-    })
+    options = get_chrome_options(download_dir)
 
-    driver = uc.Chrome(options=options)
+    driver = create_chrome_driver(options=options)
 
     try:
         print(f"Trying direct URL for model {model}...")
@@ -200,22 +187,22 @@ def scrape_frigidaire_manual(model):
         print(f"Current URL after navigation: {driver.current_url}")
 
         # Wait for page to load
-        WebDriverWait(driver, 10).until(
+        WebDriverWait(driver, 5).until(
             EC.presence_of_element_located((By.TAG_NAME, "body"))
         )
 
         # Wait for manuals section to load
         try:
-            WebDriverWait(driver, 10).until(
+            WebDriverWait(driver, 5).until(
                 EC.presence_of_element_located((By.CSS_SELECTOR, ".manuals"))
             )
         except:
             print("Manuals section not found, waiting additional time...")
-            time.sleep(5)
+            time.sleep(0.2)
 
         # Scroll to load lazy content
         driver.execute_script("window.scrollTo(0, document.body.scrollHeight);")
-        time.sleep(2)
+        time.sleep(0.2)
 
         print(f"Current URL after page load: {driver.current_url}")
         print(f"Looking for 'owner-center': {'owner-center' in driver.current_url}")
@@ -246,12 +233,12 @@ def scrape_frigidaire_manual(model):
         print(f"Search page URL: {driver.current_url}")
 
         # Wait for page to load
-        WebDriverWait(driver, 10).until(
+        WebDriverWait(driver, 5).until(
             EC.presence_of_element_located((By.TAG_NAME, "body"))
         )
 
         # Click search input
-        search_input = WebDriverWait(driver, 10).until(
+        search_input = WebDriverWait(driver, 5).until(
             EC.element_to_be_clickable((By.CSS_SELECTOR, ".form-control"))
         )
         search_input.click()
@@ -261,7 +248,7 @@ def scrape_frigidaire_manual(model):
         search_input.send_keys(model)
 
         # Click search button
-        search_button = WebDriverWait(driver, 10).until(
+        search_button = WebDriverWait(driver, 5).until(
             EC.element_to_be_clickable((By.CSS_SELECTOR, ".fa"))
         )
         search_button.click()
@@ -279,7 +266,7 @@ def scrape_frigidaire_manual(model):
 
         # Click product image
         try:
-            product_image = WebDriverWait(driver, 10).until(
+            product_image = WebDriverWait(driver, 5).until(
                 EC.element_to_be_clickable((By.CSS_SELECTOR, ".cx-product-image > img"))
             )
             # Use JavaScript click to avoid interception
@@ -303,7 +290,7 @@ def scrape_frigidaire_manual(model):
             print(f"No modal to close or close failed: {e}")
 
         # Click "Complete Owner's Guide"
-        owners_guide_link = WebDriverWait(driver, 10).until(
+        owners_guide_link = WebDriverWait(driver, 5).until(
             EC.element_to_be_clickable((By.LINK_TEXT, "Complete Owner's Guide"))
         )
 

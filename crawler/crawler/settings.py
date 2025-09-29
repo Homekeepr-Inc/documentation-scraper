@@ -20,6 +20,12 @@ if PROJECT_ROOT not in sys.path:
 # Ensure crawler runs from project root for consistent database paths
 os.chdir(PROJECT_ROOT)
 
+# Proxy configuration
+from app.config import PROXY_URL
+if PROXY_URL:
+    HTTP_PROXY = PROXY_URL
+    HTTPS_PROXY = PROXY_URL
+
 # Standard HTTP handlers (Playwright removed for simplicity)
 # Note: Playwright can be re-added if needed for JS-heavy sites
 

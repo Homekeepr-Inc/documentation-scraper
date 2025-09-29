@@ -31,7 +31,7 @@ from app.config import DEFAULT_BLOB_ROOT
 
 # Import utility functions
 sys.path.append(os.path.join(os.path.dirname(__file__)))
-from utils import duckduckgo_fallback, validate_pdf_file, wait_for_download, safe_driver_get, validate_and_ingest_manual, create_temp_download_dir, cleanup_temp_dir
+from utils import duckduckgo_fallback, validate_pdf_file, wait_for_download, safe_driver_get, validate_and_ingest_manual, create_temp_download_dir, cleanup_temp_dir, get_chrome_options, create_chrome_driver
 
 
 
@@ -54,10 +54,10 @@ def scrape_from_lg_page(driver, model, download_dir):
         print("Performing recorded actions for LG page...")
         # Dismiss consent overlay
         driver.execute_script("const consent = document.getElementById('transcend-consent-manager'); if (consent) consent.style.display = 'none';")
-        time.sleep(random.uniform(0.03, 0.09))
+        time.sleep(0.2)
         # Scroll a bit
         driver.execute_script("window.scrollTo(0,2)")
-        time.sleep(random.uniform(0.03, 0.09))
+        time.sleep(0.2)
 
         # Click the manuals tab
         try:
@@ -66,7 +66,7 @@ def scrape_from_lg_page(driver, model, download_dir):
             )
             tab.click()
             print("Clicked manuals tab.")
-            time.sleep(random.uniform(0.03, 0.09))
+            time.sleep(0.2)
         except Exception as e:
             print(f"Error clicking manuals tab: {e}")
             return None
@@ -86,7 +86,7 @@ def scrape_from_lg_page(driver, model, download_dir):
                 button.click()
                 print("Clicked PDF download button.")
                 # Wait for download
-                time.sleep(random.uniform(1.13, 3.02))  # wait for download to complete
+                time.sleep(0.2)
                 downloads = [f for f in os.listdir(download_dir) if f.endswith('.pdf')]
                 if downloads:
                     pdf_url = os.path.join(download_dir, downloads[0])
@@ -156,24 +156,12 @@ def scrape_lg_manual(model):
     pdf_url = None
 
     # Launch undetected Chrome
-    options = uc.ChromeOptions()
-    options.add_argument('--headless')
-    options.add_argument('--disable-dev-shm-usage')
-    options.add_argument('--disable-gpu')
-    options.add_argument('--window-size=1920,1080')
-    options.add_argument('--disable-popup-blocking')
-    options.add_argument('--user-agent=Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36')
     # Set download preferences
     temp_dir = create_temp_download_dir()
     download_dir = temp_dir
-    options.add_experimental_option("prefs", {
-        "download.default_directory": download_dir,
-        "download.prompt_for_download": False,
-        "download.directory_upgrade": True,
-        "plugins.always_open_pdf_externally": True
-    })
+    options = get_chrome_options(download_dir)
 
-    driver = uc.Chrome(options=options)
+    driver = create_chrome_driver(options=options)
 
     try:
         print(f"Fetching page for model {model}...")
@@ -181,7 +169,7 @@ def scrape_lg_manual(model):
         print(f"Current URL: {driver.current_url}")
 
         # Wait for JS to render
-        time.sleep(random.uniform(0.03, 0.09))
+        time.sleep(0.2)
 
         # Get the page source and parse it
         page_source = driver.page_source
@@ -199,25 +187,25 @@ def scrape_lg_manual(model):
             retry_url = f"https://www.lg.com/us/support/product/lg-{model}"
             safe_driver_get(driver, retry_url)
             print(f"Retry URL: {driver.current_url}")
-            time.sleep(random.uniform(0.03, 0.09))
+            time.sleep(0.2)
             # Dismiss consent overlay
             driver.execute_script("const consent = document.getElementById('transcend-consent-manager'); if (consent) consent.style.display = 'none';")
-            time.sleep(random.uniform(0.03, 0.09))
+            time.sleep(0.2)
             # Mouse over element to trigger loading
             try:
                 element = driver.find_element(By.CSS_SELECTOR, ".MuiBox-root:nth-child(3) .MuiButtonBase-root")
                 actions = ActionChains(driver)
                 actions.move_to_element(element).perform()
-                time.sleep(random.uniform(0.03, 0.09))
+                time.sleep(0.2)
             except Exception as e:
                 print(f"Mouse over failed: {e}")
             # Scrolling
             driver.execute_script("window.scrollTo(0,5)")
-            time.sleep(random.uniform(0.03, 0.09))
+            time.sleep(0.2)
             driver.execute_script("window.scrollTo(0,272)")
-            time.sleep(random.uniform(0.03, 0.09))
+            time.sleep(0.2)
             driver.execute_script("window.scrollTo(0,672)")
-            time.sleep(random.uniform(0.03, 0.09))
+            time.sleep(0.2)
             url = retry_url  # Update URL for source_url
             page_source = driver.page_source
             soup = BeautifulSoup(page_source, 'html.parser')
@@ -232,7 +220,7 @@ def scrape_lg_manual(model):
             print("Performing recorded actions for lg- page...")
             # Scroll a bit
             driver.execute_script("window.scrollTo(0,2)")
-            time.sleep(random.uniform(0.03, 0.09))
+            time.sleep(0.2)
             # Click the manuals tab
             try:
                 tab = WebDriverWait(driver, 5).until(
@@ -240,7 +228,7 @@ def scrape_lg_manual(model):
                 )
                 tab.click()
                 print("Clicked manuals tab.")
-                time.sleep(random.uniform(0.03, 0.09))
+                time.sleep(0.2)
                 # Debug: print all manual items
                 manuals = driver.find_elements(By.CSS_SELECTOR, ".MuiPaper-root")
                 print(f"Found {len(manuals)} manual items:")
@@ -265,7 +253,7 @@ def scrape_lg_manual(model):
                     button.click()
                     print("Clicked PDF download button.")
                     # Wait for download
-                    time.sleep(random.uniform(1.13, 3.02))  # wait for download to complete
+                    time.sleep(0.2)
                     downloads = [f for f in os.listdir(download_dir) if f.endswith('.pdf')]
                     if downloads:
                         pdf_url = os.path.join(download_dir, downloads[0])
