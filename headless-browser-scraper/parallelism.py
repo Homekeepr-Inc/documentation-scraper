@@ -15,7 +15,7 @@ parallelism_count = 2
 # Global queue for all scraper jobs
 job_queue = queue.Queue()
 
-# Semaphore to limit to 2 concurrent browsers
+# Semaphore to limit to cparallelism_count oncurrent browsers
 browser_semaphore = threading.Semaphore(parallelism_count)
 
 # Dict to store job results: job_id -> result
@@ -133,7 +133,7 @@ def worker():
         job_queue.task_done()
 
 
-# Start 2 worker threads
+# Start parallelism_count worker threads
 worker_threads = []
 for i in range(parallelism_count):
     t = threading.Thread(target=worker, daemon=True)
