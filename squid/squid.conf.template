@@ -3,8 +3,8 @@
 http_port 8888
 
 # Upstream proxies (add more cache_peer lines as needed for additional upstreams)
-cache_peer ${UPSTREAM1_HOST} parent ${UPSTREAM1_PORT} 0 proxy-only no-query no-digest login=${UPSTREAM1_USER_PASS} name=upstream1
-cache_peer ${UPSTREAM2_HOST} parent ${UPSTREAM2_PORT} 0 proxy-only no-query no-digest login=${UPSTREAM2_USER_PASS} name=upstream2
+cache_peer ${UPSTREAM_1_HOST} parent ${UPSTREAM_PROXY_PORT} 0 proxy-only no-query no-digest login=${UPSTREAM_1_USER_PASS} round-robin name=upstream1
+cache_peer ${UPSTREAM_2_HOST} parent ${UPSTREAM_PROXY_PORT} 0 proxy-only no-query no-digest login=${UPSTREAM_2_USER_PASS} round-robin name=upstream2
 
 # Allow access to all upstream peers
 cache_peer_access upstream1 allow all
