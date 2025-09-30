@@ -65,16 +65,10 @@ def fallback_scrape(model):
         safe_driver_get(driver, fallback_url)
         print(f"Navigated to fallback URL: {fallback_url}")
 
-        WebDriverWait(driver, 5).until(
+        WebDriverWait(driver, 10).until(
             EC.presence_of_element_located((By.CSS_SELECTOR, ".bmpg-ownersManualLink"))
         )
 
-        # Handle cookie consent
-        try:
-            reject_button = driver.find_element(By.ID, "onetrust-reject-all-handler")
-            reject_button.click()
-        except Exception:
-            pass  # Ignore if not present
 
         owners_manual_link = driver.find_element(By.CSS_SELECTOR, ".bmpg-ownersManualLink a")
         pdf_url = owners_manual_link.get_attribute("href")
@@ -83,10 +77,10 @@ def fallback_scrape(model):
             return None
         title = f"Samsung {original_model} manual"
 
-        # Navigate to the PDF URL directly
+        # Navigate to the PDF URL to trigger download via browser
         safe_driver_get(driver, pdf_url)
 
-        # Wait for download to start
+        # Wait for download to complete
         pdf_path = wait_for_download(download_dir, timeout=30)
 
         if pdf_path and validate_pdf_file(pdf_path):
