@@ -47,8 +47,8 @@ def get_chrome_options(download_dir=None):
     options.add_argument('--disable-extensions')
     options.add_argument('--user-agent=Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36')
 
-    # Use TinyProxy proxy (unauthenticated local proxy forwarding to Rayobyte)
-    tinyproxy_proxy = "http://tinyproxy:8888"  # Hardcode for clarity; matches Docker Compose env
+    # Use Squid proxy (unauthenticated local proxy forwarding to Rayobyte)
+    squid_proxy = "http://squid:8888"  # Hardcode for clarity; matches Docker Compose env
     if PROXY_URL:
         options.add_argument(f'--proxy-server={PROXY_URL}')
         print(f"Using proxy server {PROXY_URL}")

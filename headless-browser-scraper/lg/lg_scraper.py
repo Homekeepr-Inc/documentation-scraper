@@ -86,7 +86,7 @@ def scrape_from_lg_page(driver, model, download_dir):
                 button.click()
                 print("Clicked PDF download button.")
                 # Wait for download
-                time.sleep(0.2)
+                time.sleep(10)
                 downloads = [f for f in os.listdir(download_dir) if f.endswith('.pdf')]
                 if downloads:
                     pdf_url = os.path.join(download_dir, downloads[0])
@@ -228,7 +228,7 @@ def scrape_lg_manual(model):
                 )
                 tab.click()
                 print("Clicked manuals tab.")
-                time.sleep(0.2)
+                time.sleep(2)  # Increased wait for manuals to load
                 # Debug: print all manual items
                 manuals = driver.find_elements(By.CSS_SELECTOR, ".MuiPaper-root")
                 print(f"Found {len(manuals)} manual items:")
@@ -240,27 +240,40 @@ def scrape_lg_manual(model):
             # Get the PDF URL from the button
             try:
                 button = WebDriverWait(driver, 5).until(
-                    EC.element_to_be_clickable((By.CSS_SELECTOR, ".MuiPaper-root:nth-child(1) .MuiGrid-root:nth-child(2) > .MuiTypography-root:nth-child(1)"))
+                    EC.element_to_be_clickable((By.CSS_SELECTOR, "#simple-tabpanel-1 > div > div > div:nth-child(1) > div > div:nth-child(1)"))
                 )
-                attrs = driver.execute_script("return Array.from(arguments[0].attributes).map(attr => ({name: attr.name, value: attr.value}))", button)
-                data_attrs = [attr for attr in attrs if attr['name'].startswith('data')]
-                # Removed loop prints for performance
-                pdf_url = button.get_attribute('href')
-                if pdf_url:
-                    print(f"Got PDF URL from href: {pdf_url}")
+                # Skip href check as the div has no href
+                print("Clicking manual item...")
+                button.click()
+                print("Clicked manual item.")
+                # Wait for action
+                time.sleep(2)
+                current_url = driver.current_url
+                print(f"Current URL after click: {current_url}")
+                windows = driver.window_handles
+                print(f"Number of windows: {len(windows)}")
+                if 'pdf' in current_url.lower() or current_url.endswith('.pdf'):
+                    pdf_url = current_url
+                    print(f"Got PDF URL from navigation: {pdf_url}")
+                elif len(windows) > 1:
+                    # New tab opened
+                    driver.switch_to.window(windows[-1])
+                    pdf_url = driver.current_url
+                    if pdf_url and ('pdf' in pdf_url.lower() or pdf_url.endswith('.pdf')):
+                        print(f"Got PDF URL from new tab: {pdf_url}")
+                    else:
+                        print("New tab opened but not a PDF URL")
+                        pdf_url = None
+                    driver.close()
+                    driver.switch_to.window(windows[0])
                 else:
-                    print("No href found, clicking button...")
-                    button.click()
-                    print("Clicked PDF download button.")
                     # Wait for download
-                    time.sleep(0.2)
-                    downloads = [f for f in os.listdir(download_dir) if f.endswith('.pdf')]
-                    if downloads:
-                        pdf_url = os.path.join(download_dir, downloads[0])
+                    pdf_url = wait_for_download(download_dir, timeout=10)
+                    if pdf_url:
                         print(f"Downloaded PDF: {pdf_url}")
                     else:
-                        print("No PDF downloaded")
-                        return None
+                        print("No PDF downloaded within timeout")
+                        pdf_url = None
             except Exception as e:
                 print(f"Error getting PDF URL: {e}")
                 return None

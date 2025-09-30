@@ -5,7 +5,7 @@ services:
     env_file:
       - .env
     environment:
-      - PROXY_URL=http://tinyproxy:8888  # Point to TinyProxy (unauthenticated locally)
+      - PROXY_URL=http://squid:8888  # Point to Squid (unauthenticated locally)
     volumes:
       - ./data:/app/data
     command: ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
@@ -18,10 +18,10 @@ services:
     networks:
       - app_network
     depends_on:
-      - tinyproxy  # Ensure TinyProxy starts first
+      - squid  # Ensure Squid starts first
 
-  tinyproxy:
-    build: ./tinyproxy
+  squid:
+    build: ./squid
     env_file:
       - .env
     networks:

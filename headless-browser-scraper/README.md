@@ -38,12 +38,27 @@ This approach ensures reliable cleanup while preventing premature deletion of fi
 
 ## Configuration
 
+### Environment Variables
+
+Create a `.env` file in the project root with the following variables:
+
+```
+# Secret for the http main.py API.
+SCRAPER_SECRET=test_secret
+
+# FOR UPSTREAM PROXY SERVICES TO AVOID VPS IP GETTING BLOCKED
+UPSTREAM_PROXY_1=<user>:<pass>@<port>
+UPSTREAM_PROXY_PORT=12323
+UPSTREAM_PROXY_2=<same format as proxy_1>
+```
+
 ### Proxy Settings
 
 All headless browser scrapers are automatically proxied using `proxychains-ng` when run inside the Docker container. The proxy is configured via the `proxychains.conf` file and the `PROXY_URL` environment variable.
 
 - **Transparent proxying**: No code changes are needed to use the proxy.
 - **Configuration**: The proxy is configured in the `Dockerfile` and `docker-compose.yml`.
+- **Upstream proxies**: Set `PROXY_URL` in your `.env` file to route requests through an external proxy provider.
 
 ## Conventions to Follow (Important!)
 To ensure timeliness and robustness, we have a few utility functions which should be used in certain circumstances:

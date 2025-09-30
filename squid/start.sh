@@ -1,0 +1,14 @@
+#!/bin/sh
+
+UPSTREAM1_USER_PASS=$(echo $UPSTREAM_PROXY_1 | cut -d@ -f1)
+UPSTREAM1_HOST=$(echo $UPSTREAM_PROXY_1 | cut -d@ -f2)
+UPSTREAM1_PORT=$UPSTREAM_PROXY_PORT
+UPSTREAM2_USER_PASS=$(echo $UPSTREAM_PROXY_2 | cut -d@ -f1)
+UPSTREAM2_HOST=$(echo $UPSTREAM_PROXY_2 | cut -d@ -f2)
+UPSTREAM2_PORT=$UPSTREAM_PROXY_PORT
+
+export UPSTREAM1_USER_PASS UPSTREAM1_HOST UPSTREAM1_PORT UPSTREAM2_USER_PASS UPSTREAM2_HOST UPSTREAM2_PORT
+
+envsubst < /etc/squid/squid.conf.template > /etc/squid/squid.conf
+
+squid -f /etc/squid/squid.conf -N
