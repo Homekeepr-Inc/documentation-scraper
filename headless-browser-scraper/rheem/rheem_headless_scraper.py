@@ -299,21 +299,26 @@ def rheem_supplyhouse_callback(driver, model):
         return None
 
 
-def scrape_rheem_manual(model, driver, temp_dir):
+def scrape_rheem_manual(model):
     """
     Scrape the owner's manual PDF for a given Rheem appliance model using DuckDuckGo fallback.
 
     Args:
         model (str): The model number (e.g., XG40T06EN38U1)
-        driver: Selenium WebDriver instance
-        temp_dir (str): Temporary directory for downloads
 
     Returns:
         dict: Scraped data or None if not found
     """
     # Normalize model by replacing "/" with "_"
     normalized_model = model.replace('/', '_')
+
+    # Launch undetected Chrome
+    # Set download preferences
+    temp_dir = create_temp_download_dir()
     download_dir = temp_dir
+    options = get_chrome_options(download_dir)
+
+    driver = create_chrome_driver(options=options)
 
     try:
         print(f"Starting scrape for Rheem model {model}...")
@@ -401,6 +406,9 @@ def scrape_rheem_manual(model, driver, temp_dir):
         print(f"An error occurred during scraping for Rheem {model}: {e}")
         return None
 
+    finally:
+        driver.quit()
+
 
 def ingest_rheem_manual(result):
     from utils import validate_and_ingest_manual
@@ -418,15 +426,7 @@ def main():
         print("Model number cannot be empty.")
         sys.exit(1)
 
-    # For standalone run, create a driver
-    temp_dir = create_temp_download_dir()
-    download_dir = temp_dir
-    options = get_chrome_options(download_dir)
-    driver = create_chrome_driver(options=options)
-    try:
-        results = scrape_rheem_manual(model, driver, temp_dir)
-    finally:
-        driver.quit()
+    results = scrape_rheem_manual(model)
     if results:
         print("Scraping successful!")
         print(results)

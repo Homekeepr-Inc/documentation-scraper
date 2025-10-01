@@ -35,11 +35,18 @@ from app.config import DEFAULT_BLOB_ROOT
 from utils import safe_driver_get, wait_for_download, validate_pdf_file, validate_and_ingest_manual, create_temp_download_dir, cleanup_temp_dir, get_chrome_options, create_chrome_driver
 
 
-def fallback_scrape(model, driver, temp_dir):
+# Was having issues re-using the main Selenium driver during fallbacks, so we create a new one here.
+def fallback_scrape(model):
     """
     Fallback scraping mechanism for Samsung manuals.
     """
+    # Set download preferences
+    temp_dir = create_temp_download_dir()
     download_dir = temp_dir
+    options = get_chrome_options(download_dir)
+
+    driver = create_chrome_driver(options=options)
+
     try:
         print(f"Primary scraping failed for {model}, trying fallback...")
         # Check if model has "/XX" suffix, strip it and add "-xx"
@@ -94,23 +101,22 @@ def fallback_scrape(model, driver, temp_dir):
     except Exception as e:
         print(f"An error occurred during fallback scraping for model {original_model}: {e}")
         return None
+    finally:
+        driver.quit()
 
 
-def scrape_samsung_manual(model, driver, temp_dir):
+def scrape_samsung_manual(model):
     """
     Scrape the owner's manual PDF for a given Samsung appliance model.
 
     Args:
         model (str): The model number (e.g., RF29DB9900QDAA)
-        driver: Selenium WebDriver instance
-        temp_dir (str): Temporary directory for downloads
 
     Returns:
         dict: Scraped data or None if not found
     """
     # Normalize model by replacing "/" with "_"
     normalized_model = model.replace('/', '_')
-    download_dir = temp_dir
 
     # Prepare search term and model code
     if '/' in model:
@@ -121,6 +127,14 @@ def scrape_samsung_manual(model, driver, temp_dir):
         model_code = model
 
     url = "https://www.samsung.com/latin_en/support/user-manuals-and-guide/"
+
+    # Launch undetected Chrome
+    # Set download preferences
+    temp_dir = create_temp_download_dir()
+    download_dir = temp_dir
+    options = get_chrome_options(download_dir)
+
+    driver = create_chrome_driver(options=options)
 
     try:
         print(f"Fetching page for model {model}...")
@@ -223,7 +237,10 @@ def scrape_samsung_manual(model, driver, temp_dir):
     except Exception as e:
         print(f"Primary scraping for Samsung {model} failed: {e}")
         # On failure, try the fallback scraper
-        return fallback_scrape(model, driver, temp_dir)
+        return fallback_scrape(model)
+
+    finally:
+        driver.quit()
 
 
 def download_file(url, filename):
@@ -256,14 +273,7 @@ def main():
         print("Model number cannot be empty.")
         sys.exit(1)
 
-    # For standalone run, create a driver
-    temp_dir = create_temp_download_dir()
-    options = get_chrome_options(temp_dir)
-    driver = create_chrome_driver(options=options)
-    try:
-        results = scrape_samsung_manual(model, driver, temp_dir)
-    finally:
-        driver.quit()
+    results = scrape_samsung_manual(model)
     if results:
         print("Scraping successful!")
         for result in [results]:

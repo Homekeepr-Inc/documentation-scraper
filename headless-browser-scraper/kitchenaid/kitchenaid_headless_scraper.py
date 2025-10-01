@@ -27,7 +27,7 @@ import requests
 
 # Import utility functions
 sys.path.append(os.path.dirname(__file__))
-from utils import safe_driver_get, validate_and_ingest_manual, create_temp_download_dir, cleanup_temp_dir, get_chrome_options, create_chrome_driver, wait_for_download
+from utils import safe_driver_get, validate_and_ingest_manual, create_temp_download_dir, cleanup_temp_dir, get_chrome_options, create_chrome_driver
 
 # Import config for BLOB_ROOT
 from app.config import DEFAULT_BLOB_ROOT
@@ -50,53 +50,79 @@ def scrape_from_page(driver, model, download_dir):
     # Navigate to the PDF
     safe_driver_get(driver, pdf_url)
     # Wait for download to complete
-    pdf_path = wait_for_download(download_dir, timeout=30)
-    if not pdf_path:
+    WebDriverWait(driver, 30).until(
+        lambda d: any(f.endswith('.pdf') for f in os.listdir(download_dir))
+    )
+
+    downloads = [f for f in os.listdir(download_dir) if f.endswith('.pdf')]
+    if downloads:
+        old_path = os.path.join(download_dir, downloads[0])
+        # Poll until file size stabilizes to ensure download complete
+        initial_size = -1
+        stable_count = 0
+        for _ in range(30):  # max 30 seconds
+            if os.path.exists(old_path):
+                size = os.path.getsize(old_path)
+                if size == initial_size:
+                    stable_count += 1
+                    if stable_count >= 3:  # stable for 3 seconds
+                        break
+                else:
+                    stable_count = 0
+                initial_size = size
+            time.sleep(0.2)
+        else:
+            print("Download did not stabilize within 30 seconds")
+            return None
+        new_name = f"{model}.pdf"
+        new_path = os.path.join(download_dir, new_name)
+        os.rename(old_path, new_path)
+        pdf_path = new_path
+        print(f"Downloaded PDF: {pdf_path}")
+
+        title = "Owner's Manual"
+        # Try to extract better title from URL
+        if 'owners-manual' in pdf_url.lower():
+            title = "Owner's Manual"
+        elif 'install' in pdf_url.lower():
+            title = "Installation Manual"
+        elif 'service' in pdf_url.lower():
+            title = "Service Manual"
+
+        results = [{
+            'brand': 'kitchenaid',
+            'model_number': model,
+            'doc_type': 'owner',  # Default to owner, could be refined
+            'title': title,
+            'source_url': driver.current_url,
+            'file_url': pdf_path,
+            'local_path': pdf_path,
+        }]
+        return results
+    else:
         print("PDF download failed.")
         return None
 
-    # Rename the file to model.pdf
-    new_name = f"{model}.pdf"
-    new_path = os.path.join(download_dir, new_name)
-    os.rename(pdf_path, new_path)
-    pdf_path = new_path
-    print(f"Downloaded PDF: {pdf_path}")
 
-    title = "Owner's Manual"
-    # Try to extract better title from URL
-    if 'owners-manual' in pdf_url.lower():
-        title = "Owner's Manual"
-    elif 'install' in pdf_url.lower():
-        title = "Installation Manual"
-    elif 'service' in pdf_url.lower():
-        title = "Service Manual"
-
-    results = [{
-        'brand': 'kitchenaid',
-        'model_number': model,
-        'doc_type': 'owner',  # Default to owner, could be refined
-        'title': title,
-        'source_url': driver.current_url,
-        'file_url': pdf_url,
-        'local_path': pdf_path,
-    }]
-    return results
-
-
-def scrape_kitchenaid_manual(model, driver, temp_dir):
+def scrape_kitchenaid_manual(model):
     """
     Scrape the owner's manual PDF for a given Kitchenaid appliance model.
 
     Args:
         model (str): The model number (e.g., KOES530PSS)
-        driver: Selenium WebDriver instance
-        temp_dir (str): Temporary directory for downloads
 
     Returns:
         dict: Scraped data or None if not found
     """
     url = "https://www.kitchenaid.com/owners.html"
+
+    # Launch undetected Chrome
+    # Set download preferences
+    temp_dir = create_temp_download_dir()
     download_dir = temp_dir
+    options = get_chrome_options(download_dir)
+
+    driver = create_chrome_driver(options=options)
 
     try:
         print(f"Fetching owners page for model {model}...")
@@ -188,6 +214,9 @@ def scrape_kitchenaid_manual(model, driver, temp_dir):
             print(f"Fallback also failed: {e2}")
         return None
 
+    finally:
+        driver.quit()
+
 
 def download_file(url, filename):
     """Download a file from URL to local filename."""
@@ -219,14 +248,7 @@ def main():
         print("Model number cannot be empty.")
         sys.exit(1)
 
-    # For standalone run, create a driver
-    temp_dir = create_temp_download_dir()
-    options = get_chrome_options(temp_dir)
-    driver = create_chrome_driver(options=options)
-    try:
-        results = scrape_kitchenaid_manual(model, driver, temp_dir)
-    finally:
-        driver.quit()
+    results = scrape_kitchenaid_manual(model)
     if results:
         print("Scraping successful!")
         for result in results:

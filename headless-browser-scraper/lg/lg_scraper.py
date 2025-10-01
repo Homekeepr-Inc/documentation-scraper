@@ -142,21 +142,26 @@ def scrape_from_lg_page(driver, model, download_dir):
         return None
 
 
-def scrape_lg_manual(model, driver, temp_dir):
+def scrape_lg_manual(model):
     """
     Scrape the owner's manual PDF for a given LG appliance model.
 
     Args:
         model (str): The model number (e.g., LMXS28626S)
-        driver: Selenium WebDriver instance
-        temp_dir (str): Temporary directory for downloads
 
     Returns:
         dict: Scraped data or None if not found
     """
     url = f"https://www.lg.com/us/support/product/{model}"
     pdf_url = None
+
+    # Launch undetected Chrome
+    # Set download preferences
+    temp_dir = create_temp_download_dir()
     download_dir = temp_dir
+    options = get_chrome_options(download_dir)
+
+    driver = create_chrome_driver(options=options)
 
     try:
         print(f"Fetching page for model {model}...")
@@ -385,6 +390,9 @@ def scrape_lg_manual(model, driver, temp_dir):
         print(f"Error scraping {model}: {e}")
         return None
 
+    finally:
+        driver.quit()
+
 
 
 
@@ -416,14 +424,7 @@ def main():
         print("Model number cannot be empty.")
         sys.exit(1)
 
-    # For standalone run, create a driver
-    temp_dir = create_temp_download_dir()
-    options = get_chrome_options(temp_dir)
-    driver = create_chrome_driver(options=options)
-    try:
-        result = scrape_lg_manual(model, driver, temp_dir)
-    finally:
-        driver.quit()
+    result = scrape_lg_manual(model)
     if result:
         print("Scraping successful!")
         print(result)

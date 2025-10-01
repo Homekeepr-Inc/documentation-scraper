@@ -11,21 +11,12 @@ import threading
 import uuid
 from typing import Dict, Any, Optional
 
-# Import utils for driver creation and reset
-import sys
-import os
-sys.path.append(os.path.join(os.path.dirname(__file__)))
-from utils import create_chrome_driver, reset_driver
-
-parallelism_count = 4
+parallelism_count = 2
 # Global queue for all scraper jobs
 job_queue = queue.Queue()
 
-# Semaphore to limit to parallelism_count concurrent browsers
+# Semaphore to limit to cparallelism_count oncurrent browsers
 browser_semaphore = threading.Semaphore(parallelism_count)
-
-# Driver pool: queue of available drivers
-driver_pool = queue.Queue(maxsize=parallelism_count)
 
 # Dict to store job results: job_id -> result
 job_results: Dict[str, Any] = {}
@@ -99,52 +90,35 @@ def worker():
         brand = job['brand']
         model = job['model']
 
-        # Get a driver from the pool, create if none available
-        try:
-            driver = driver_pool.get(timeout=0.1)
-        except queue.Empty:
-            driver = create_chrome_driver()
+        browser_semaphore.acquire()  # Limit to 2 concurrent browsers
         try:
             print(f"Starting scrape for {brand} {model} (job {job_id})")
 
-            # Reset driver state
-            reset_driver(driver)
-
-            # Create temp download dir for this job
-            from utils import create_temp_download_dir
-            temp_dir = create_temp_download_dir()
-
-            # Set download path for this job
-            driver.execute_cdp_cmd("Page.setDownloadBehavior", {
-                "behavior": "allow",
-                "downloadPath": temp_dir
-            })
-
-            # Import the appropriate scraper function and call with driver and temp_dir
+            # Import the appropriate scraper function
             if brand == 'lg':
                 from lg_scraper import scrape_lg_manual
-                result = scrape_lg_manual(model, driver, temp_dir)
+                result = scrape_lg_manual(model)
             elif brand == 'ge':
                 from ge.ge_headless_scraper import scrape_ge_manual
-                result = scrape_ge_manual(model, driver, temp_dir)
+                result = scrape_ge_manual(model)
             elif brand == 'whirlpool':
                 from whirlpool.whirlpool_headless_scraper import scrape_whirlpool_manual
-                result = scrape_whirlpool_manual(model, driver, temp_dir)
+                result = scrape_whirlpool_manual(model)
             elif brand == 'kitchenaid':
                 from kitchenaid.kitchenaid_headless_scraper import scrape_kitchenaid_manual
-                result = scrape_kitchenaid_manual(model, driver, temp_dir)
+                result = scrape_kitchenaid_manual(model)
             elif brand == 'samsung':
                 from samsung.samsung_headless_scraper import scrape_samsung_manual
-                result = scrape_samsung_manual(model, driver, temp_dir)
+                result = scrape_samsung_manual(model)
             elif brand == 'frigidaire':
                 from frigidaire.frigidaire_headless_scraper import scrape_frigidaire_manual
-                result = scrape_frigidaire_manual(model, driver, temp_dir)
+                result = scrape_frigidaire_manual(model)
             elif brand == 'aosmith':
                 from aosmith.aosmith_headless_scraper import scrape_aosmith_manual
-                result = scrape_aosmith_manual(model, driver, temp_dir)
+                result = scrape_aosmith_manual(model)
             elif brand == 'rheem':
                 from rheem.rheem_headless_scraper import scrape_rheem_manual
-                result = scrape_rheem_manual(model, driver, temp_dir)
+                result = scrape_rheem_manual(model)
             else:
                 result = None  # Unknown brand
 
@@ -155,8 +129,7 @@ def worker():
             print(f"Error in worker for job {job_id}: {e}")
             set_job_result(job_id, e)
         finally:
-            # Return driver to pool
-            driver_pool.put(driver)
+            browser_semaphore.release()
         job_queue.task_done()
 
 
@@ -166,6 +139,3 @@ for i in range(parallelism_count):
     t = threading.Thread(target=worker, daemon=True)
     t.start()
     worker_threads.append(t)
-
-# Initialize driver pool (lazy creation to avoid startup issues)
-# Drivers will be created on first use in worker

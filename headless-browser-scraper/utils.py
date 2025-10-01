@@ -339,30 +339,6 @@ def create_temp_download_dir():
     return tempfile.mkdtemp(dir=temp_base)
 
 
-def reset_driver(driver):
-    """
-    Reset the driver state between jobs by clearing cookies, local storage, and navigating to a clean page.
-
-    Args:
-        driver: Selenium WebDriver instance
-    """
-    try:
-        # Clear all cookies
-        driver.delete_all_cookies()
-
-        # Clear local storage and session storage
-        driver.execute_script("window.localStorage.clear();")
-        driver.execute_script("window.sessionStorage.clear();")
-
-        # Navigate to a clean page
-        driver.get("about:blank")
-
-        # Wait a bit for cleanup
-        time.sleep(0.5)
-    except Exception as e:
-        print(f"Error resetting driver: {e}")
-
-
 def cleanup_temp_dir(temp_dir):
     """
     Safely remove a temporary directory and its contents.

@@ -160,20 +160,26 @@ def parse_manual_links(driver, model):
         return None
 
 
-def scrape_frigidaire_manual(model, driver, temp_dir=None):
+def scrape_frigidaire_manual(model):
     """
     Scrape the owner's manual PDF for a given Frigidaire appliance model.
 
     Args:
         model (str): The model number (e.g., FPFU19F8WF)
-        driver: Selenium WebDriver instance
-        temp_dir (str, optional): Temporary directory (not used for Frigidaire)
 
     Returns:
         dict: Scraped data or None if not found
     """
     # Try direct URL first (from DuckDuckGo fallback pattern)
     direct_url = f"https://www.frigidaire.com/en/p/owner-center/product-support/{model}"
+
+    # Launch undetected Chrome
+    # Set download preferences
+    download_dir = os.path.abspath(DEFAULT_BLOB_ROOT)
+    os.makedirs(download_dir, exist_ok=True)
+    options = get_chrome_options(download_dir)
+
+    driver = create_chrome_driver(options=options)
 
     try:
         print(f"Trying direct URL for model {model}...")
@@ -342,6 +348,9 @@ def scrape_frigidaire_manual(model, driver, temp_dir=None):
         # Try DuckDuckGo fallback
         return duckduckgo_fallback(driver, model, "frigidaire.com", lambda d: parse_manual_links(d, model))
 
+    finally:
+        driver.quit()
+
 
 def download_file(url, filename):
     """Download a file from URL to local filename."""
@@ -370,15 +379,7 @@ def main():
         print("Model number cannot be empty.")
         sys.exit(1)
 
-    # For standalone run, create a driver
-    download_dir = os.path.abspath(DEFAULT_BLOB_ROOT)
-    os.makedirs(download_dir, exist_ok=True)
-    options = get_chrome_options(download_dir)
-    driver = create_chrome_driver(options=options)
-    try:
-        result = scrape_frigidaire_manual(model, driver)
-    finally:
-        driver.quit()
+    result = scrape_frigidaire_manual(model)
     if result:
         print("Scraping successful!")
         print(result)

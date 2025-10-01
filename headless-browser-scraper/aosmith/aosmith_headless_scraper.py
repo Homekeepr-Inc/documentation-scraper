@@ -212,21 +212,26 @@ def fallback_scrape(model):
         driver.quit()
 
 
-def scrape_aosmith_manual(model, driver, temp_dir):
+def scrape_aosmith_manual(model):
     """
     Scrape the owner's manual PDF for a given A.O. Smith appliance model using DuckDuckGo fallback.
 
     Args:
         model (str): The model number (e.g., E6-50H45DV)
-        driver: Selenium WebDriver instance
-        temp_dir (str): Temporary directory for downloads
 
     Returns:
         dict: Scraped data or None if not found
     """
     # Normalize model by replacing "/" with "_"
     normalized_model = model.replace('/', '_')
+
+    # Launch undetected Chrome
+    # Set download preferences
+    temp_dir = create_temp_download_dir()
     download_dir = temp_dir
+    options = get_chrome_options(download_dir)
+
+    driver = create_chrome_driver(options=options)
 
     try:
         print(f"Attempting DuckDuckGo fallback for A.O. Smith model {model}...")
@@ -261,6 +266,9 @@ def scrape_aosmith_manual(model, driver, temp_dir):
         print(f"An error occurred during scraping for A.O. Smith {model}: {e}")
         return None
 
+    finally:
+        driver.quit()
+
 
 def ingest_aosmith_manual(result):
     from utils import validate_and_ingest_manual
@@ -278,15 +286,7 @@ def main():
         print("Model number cannot be empty.")
         sys.exit(1)
 
-    # For standalone run, create a driver
-    temp_dir = create_temp_download_dir()
-    download_dir = temp_dir
-    options = get_chrome_options(download_dir)
-    driver = create_chrome_driver(options=options)
-    try:
-        results = scrape_aosmith_manual(model, driver, temp_dir)
-    finally:
-        driver.quit()
+    results = scrape_aosmith_manual(model)
     if results:
         print("Scraping successful!")
         print(results)
