@@ -109,24 +109,22 @@ def fallback_scrape(driver, model, search_url, download_dir):
         print(f"An error occurred during fallback scraping for model {model}: {e}")
         return None
 
-def scrape_whirlpool_manual(model):
+def scrape_whirlpool_manual(model, driver, temp_dir):
     """
     Scrape the owner's manual PDF for a given Whirlpool appliance model.
 
     Args:
         model (str): The model number (e.g., WRT311FZDW)
+        driver: Selenium WebDriver instance
+        temp_dir (str): Temporary directory for downloads
 
     Returns:
         dict: Scraped data or None if not found
     """
     search_url = f"https://www.whirlpool.com/results.html?term={model}"
     print(f"Fetching page for model {model}...")
-    # Set download preferences
-    temp_dir = create_temp_download_dir()
     download_dir = temp_dir
-    options = get_chrome_options(download_dir)
 
-    driver = create_chrome_driver(options=options)
     try:
         print(f"Navigating to: {search_url}")
         safe_driver_get(driver, search_url)
@@ -202,8 +200,6 @@ def scrape_whirlpool_manual(model):
     except Exception as e:
         print(f"An error occurred while scraping for model {model}: {e}")
         return fallback_scrape(driver, model, search_url, download_dir)
-    finally:
-        driver.quit()
 
 def ingest_whirlpool_manual(result):
     from utils import validate_and_ingest_manual
@@ -217,7 +213,14 @@ def main():
     
     models = sys.argv[1:]
     for model in models:
-        result = scrape_whirlpool_manual(model)
+        # For standalone run, create a driver
+        temp_dir = create_temp_download_dir()
+        options = get_chrome_options(temp_dir)
+        driver = create_chrome_driver(options=options)
+        try:
+            result = scrape_whirlpool_manual(model, driver, temp_dir)
+        finally:
+            driver.quit()
         if result:
             print("Scraping successful!")
             print(result)

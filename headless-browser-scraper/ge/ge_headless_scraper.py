@@ -34,21 +34,19 @@ def similar(a, b):
     return SequenceMatcher(None, a, b).ratio()
 
 
-def scrape_ge_manual(model):
+def scrape_ge_manual(model, driver, temp_dir=None):
     """
     Scrape the owner's manual PDF for a given GE appliance model.
 
     Args:
         model (str): The model number (e.g., CFE28TSHFSS)
+        driver: Selenium WebDriver instance
+        temp_dir (str, optional): Temporary directory (not used for GE)
 
     Returns:
         dict: Scraped data or None if not found
     """
     url = f"https://www.geapplianceparts.com/store/parts/assembly/{model}.html"
-    # Launch undetected Chrome in headless mode
-    options = get_chrome_options()
-
-    driver = create_chrome_driver(options=options)
 
     try:
         print(f"Fetching page for model {model}...")
@@ -233,9 +231,6 @@ def scrape_ge_manual(model):
         print(f"Error scraping {model}: {e}")
         return None
 
-    finally:
-        driver.quit()
-
 
 def download_file(url, filename):
     """Download a file from URL to local filename."""
@@ -265,7 +260,13 @@ def main():
         print("Model number cannot be empty.")
         sys.exit(1)
 
-    results = scrape_ge_manual(model)
+    # For standalone run, create a driver
+    options = get_chrome_options()
+    driver = create_chrome_driver(options=options)
+    try:
+        results = scrape_ge_manual(model, driver)
+    finally:
+        driver.quit()
     if results:
         print("Scraping successful!")
         for result in results:
