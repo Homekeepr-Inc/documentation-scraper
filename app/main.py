@@ -14,15 +14,14 @@ from .db import init_db, fetch_document, search_documents
 
 # Add path for headless scraper
 sys.path.append(os.path.join(os.path.dirname(__file__), '..', 'headless-browser-scraper'))
-from parallelism import enqueue_scrape_job, get_job_result, is_job_complete
-from ge.ge_headless_scraper import ingest_ge_manual
-from lg.lg_scraper import ingest_lg_manual
-from kitchenaid.kitchenaid_headless_scraper import ingest_kitchenaid_manual
-from whirlpool.whirlpool_headless_scraper import ingest_whirlpool_manual
-from samsung.samsung_headless_scraper import ingest_samsung_manual
-from frigidaire.frigidaire_headless_scraper import ingest_frigidaire_manual
-from aosmith.aosmith_headless_scraper import ingest_aosmith_manual
-from rheem.rheem_headless_scraper import ingest_rheem_manual
+from ge.ge_headless_scraper import scrape_ge_manual, ingest_ge_manual
+from lg.lg_scraper import scrape_lg_manual, ingest_lg_manual
+from kitchenaid.kitchenaid_headless_scraper import scrape_kitchenaid_manual, ingest_kitchenaid_manual
+from whirlpool.whirlpool_headless_scraper import scrape_whirlpool_manual, ingest_whirlpool_manual
+from samsung.samsung_headless_scraper import scrape_samsung_manual, ingest_samsung_manual
+from frigidaire.frigidaire_headless_scraper import scrape_frigidaire_manual, ingest_frigidaire_manual
+from aosmith.aosmith_headless_scraper import scrape_aosmith_manual, ingest_aosmith_manual
+from rheem.rheem_headless_scraper import scrape_rheem_manual, ingest_rheem_manual
 
 templates = Jinja2Templates(directory="app/templates")
 
@@ -130,7 +129,7 @@ def get_document_text(doc_id: int):
 
 
 @app.get("/scrape/{brand}/{model:path}")
-async def scrape_brand_model(brand: str, model: str):
+def scrape_brand_model(brand: str, model: str):
     brand = brand.lower()
     supported_brands = {'ge', 'lg', 'kitchenaid', 'whirlpool', 'samsung', 'frigidaire', 'aosmith', 'rheem'}
     if brand not in supported_brands:
@@ -139,24 +138,30 @@ async def scrape_brand_model(brand: str, model: str):
     normalized_model = normalize_model(model)
 
     # Check DB for existing document
-    loop = asyncio.get_event_loop()
     from .db import get_db
-    doc = await loop.run_in_executor(None, lambda: get_db().execute("SELECT id, local_path FROM documents WHERE brand = ? AND model_number = ? AND local_path IS NOT NULL LIMIT 1", (brand, normalized_model)).fetchone())
+    doc = get_db().execute("SELECT id, local_path FROM documents WHERE brand = ? AND model_number = ? AND local_path IS NOT NULL LIMIT 1", (brand, normalized_model)).fetchone()
     if doc:
         return FileResponse(doc[1], media_type="application/pdf")
 
-    # Not cached, enqueue scrape job
-    job_id = enqueue_scrape_job(brand, model)
-
-    # Wait for result
-    while not is_job_complete(job_id):
-        await asyncio.sleep(0.5)
-
-    result = get_job_result(job_id)
-
-    if isinstance(result, Exception):
-        raise HTTPException(status_code=500, detail=f"Scraping failed.")
-
+    # Not cached, scrape synchronously
+    if brand == 'ge':
+        result = scrape_ge_manual(model)
+    elif brand == 'lg':
+        result = scrape_lg_manual(model)
+    elif brand == 'kitchenaid':
+        result = scrape_kitchenaid_manual(model)
+    elif brand == 'whirlpool':
+        result = scrape_whirlpool_manual(model)
+    elif brand == 'samsung':
+        result = scrape_samsung_manual(model)
+    elif brand == 'frigidaire':
+        result = scrape_frigidaire_manual(model)
+    elif brand == 'aosmith':
+        result = scrape_aosmith_manual(model)
+    elif brand == 'rheem':
+        result = scrape_rheem_manual(model)
+    else:
+        result = None
 
     if not result:
         raise HTTPException(status_code=404, detail="No manual found")
@@ -183,10 +188,10 @@ async def scrape_brand_model(brand: str, model: str):
     elif brand == 'rheem':
         ingest_func = ingest_rheem_manual
 
-    ingest_result = await loop.run_in_executor(None, ingest_func, result)
+    ingest_result = ingest_func(result)
     if not ingest_result or not ingest_result.id:
         # Check if already exists
-        doc = await loop.run_in_executor(None, lambda: get_db().execute("SELECT id FROM documents WHERE file_url = ?", (result['file_url'],)).fetchone())
+        doc = get_db().execute("SELECT id FROM documents WHERE file_url = ?", (result['file_url'],)).fetchone()
         if doc:
             doc_id = doc[0]
         else:
@@ -210,7 +215,7 @@ async def scrape_brand_model(brand: str, model: str):
                 print(f"Error cleaning temp dir {temp_dir}: {e}")
 
     # Serve the file
-    doc = await loop.run_in_executor(None, fetch_document, doc_id)
+    doc = fetch_document(doc_id)
     if not doc:
         raise HTTPException(status_code=404, detail="Document not found")
     path = doc.get("local_path")
