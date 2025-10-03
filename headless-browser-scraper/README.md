@@ -10,20 +10,16 @@ Over time, our risk of getting IP / fingerprint banned will be lower as we amass
 ## How it works
 We use Selenium to orchestrate the browser to download PDFs for various manufacturers.
 
-We use a global queue based system to handle workloads across all scrapers. Currently, we use a parallelism of 2, allowing up to 2 browser instances to load concurrently, regardless of brand.
+The API provides a single consolidated endpoint `/scrape/{brand}/{model}` that handles all supported brands (GE, LG, Kitchenaid, Whirlpool, Samsung, Frigidaire, AOSmith, Rheem). Scraping is performed synchronously per request, handled by 4 scraper containers for parallleism.
 
-This prevents resource exhaustion when multiple requests arrive for different brands. Monitor resource usage and adjust the semaphore value in parallelism.py if needed.
-
-The API provides a single consolidated endpoint `/scrape/{brand}/{model}` that handles all supported brands (GE, LG, Kitchenaid, Whirlpool). Requests are enqueued globally and processed asynchronously.
-
-Again, as time goes on and we amass more manuals, the calls requiring us to actually scrape will become less and less frequent.
+As time goes on and we amass more manuals, the calls requiring us to actually scrape will become less and less frequent, as cached results are served directly.
 
 We also don't have hard time requirements. Faster is better, but its okay if it takes ~20 seconds to fetch a manual. Our RAG pipeline takes longer.
 
 ## Architecture
-- `parallelism.py`: Manages global job queue and semaphore for controlling concurrent browser instances across all scrapers.
 - Individual scraper modules (e.g., `lg_scraper.py`, `ge_headless_scraper.py`) contain brand-specific scraping logic.
-- API endpoints in `app/main.py` enqueue jobs via `parallelism.py` instead of direct scraping.
+- API endpoints in `app/main.py` call scraper functions directly for synchronous scraping.
+- Docker setup includes 4 scraper replicas, load balanced by Caddy, each using the Squid proxy container instance for reduced bot detection risk based on IP notoriety.
 
 ## Temp Directory Management
 To prevent race conditions between concurrent scraping jobs, each scraper uses isolated per-job temp directories:
@@ -46,19 +42,20 @@ Create a `.env` file in the project root with the following variables:
 # Secret for the http main.py API.
 SCRAPER_SECRET=test_secret
 
-# FOR UPSTREAM PROXY SERVICES TO AVOID VPS IP GETTING BLOCKED
-UPSTREAM_PROXY_1=<user>:<pass>@<port>
+# Upstream proxy configurations (used by Squid)
+UPSTREAM_1_HOST=<proxy1_host>
+UPSTREAM_1_USER_PASS=<user>:<pass>
+UPSTREAM_2_HOST=<proxy2_host>
+UPSTREAM_2_USER_PASS=<user>:<pass>
 UPSTREAM_PROXY_PORT=12323
-UPSTREAM_PROXY_2=<same format as proxy_1>
 ```
 
 ### Proxy Settings
 
-All headless browser scrapers are automatically proxied using `proxychains-ng` when run inside the Docker container. The proxy is configured via the `proxychains.conf` file and the `PROXY_URL` environment variable.
+All headless browser scrapers use Selenium's built-in proxy configuration via the `--proxy-server` argument. The proxy URL is set through the `PROXY_URL` environment variable in the app containers.
 
-- **Transparent proxying**: No code changes are needed to use the proxy.
-- **Configuration**: The proxy is configured in the `Dockerfile` and `docker-compose.yml`.
-- **Upstream proxies**: Set `PROXY_URL` in your `.env` file to route requests through an external proxy provider.
+- **Configuration**: Each app service (app1/app2) points to its own Squid proxy instance (squid1/squid2), which forwards to a dedicated upstream proxy to ensure consistent IP usage per app replica and reduce bot detection.
+- **Upstream proxies**: Configure `UPSTREAM_1_HOST`, `UPSTREAM_2_HOST`, etc., in your `.env` file. Squid handles authentication and routing.
 
 ## Conventions to Follow (Important!)
 To ensure timeliness and robustness, we have a few utility functions which should be used in certain circumstances:
