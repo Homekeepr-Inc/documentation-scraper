@@ -31,17 +31,20 @@ services:
     # No ports exposed externally (internal only)
 
   caddy:
-    image: caddy:2
-    environment:
-      - DOMAIN_NAME=${DOMAIN_NAME:-api.homekeepr.co}
-      - TLS_DIRECTIVE=${TLS_DIRECTIVE:-tls /etc/caddy/cert.pem /etc/caddy/key.pem}
-    working_dir: /etc/caddy
-    ports:
-      - "443:443"
-    volumes:
-      - ./caddy:/etc/caddy
-    networks:
-      - app_network
+     image: caddy:2
+     environment:
+       - DOMAIN_NAME=${DOMAIN_NAME:-api.homekeepr.co}
+       - TLS_DIRECTIVE=${TLS_DIRECTIVE:-tls /etc/caddy/cert.pem /etc/caddy/key.pem}
+     working_dir: /etc/caddy
+     ports:
+       - "443:443"
+     volumes:
+       - ./caddy:/etc/caddy
+     networks:
+       - app_network
+     depends_on:
+       app:
+         condition: service_healthy
 
 networks:
   app_network:
