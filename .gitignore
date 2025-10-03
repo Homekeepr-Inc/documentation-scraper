@@ -3,6 +3,7 @@ data/storage/*
 .DS_Store
 *.pem
 squid.conf
+manuals.db
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
