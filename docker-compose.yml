@@ -7,7 +7,7 @@ services:
     environment:
       - PROXY_URL=http://squid:8888  # Point to Squid (unauthenticated locally)
     volumes:
-      - ./data:/app/data
+      - manuals_data:/app/data
     command: ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
@@ -19,6 +19,8 @@ services:
       - app_network
     depends_on:
       - squid  # Ensure Squid starts first
+    deploy:
+      replicas: 4  # Scale to multiple instances for parallelism
 
   squid:
     build: ./squid
@@ -44,3 +46,7 @@ services:
 networks:
   app_network:
     driver: bridge
+
+volumes:
+  manuals_data:
+    driver: local

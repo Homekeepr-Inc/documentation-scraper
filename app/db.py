@@ -1,4 +1,6 @@
 import sqlite3
+import time
+import random
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional
 
@@ -6,6 +8,24 @@ from .config import DB_PATH
 from .logging_config import get_logger
 
 logger = get_logger("database")
+
+
+def _retry_on_busy(func, max_retries=5, base_delay=0.1):
+    """Retry a database operation on SQLITE_BUSY errors with exponential backoff."""
+    for attempt in range(max_retries):
+        try:
+            return func()
+        except sqlite3.OperationalError as e:
+            if "database is locked" in str(e) or "SQLITE_BUSY" in str(e):
+                if attempt < max_retries - 1:
+                    delay = base_delay * (2 ** attempt) + random.uniform(0, 0.1)
+                    logger.warning(f"Database busy, retrying in {delay:.2f}s (attempt {attempt + 1}/{max_retries})")
+                    time.sleep(delay)
+                else:
+                    logger.error(f"Database operation failed after {max_retries} retries: {e}")
+                    raise
+            else:
+                raise
 
 
 def _ensure_data_dir() -> None:
@@ -119,30 +139,37 @@ def init_db() -> None:
 
 
 def insert_or_ignore_document(doc: Dict[str, Any]) -> Optional[int]:
-    conn = get_db()
-    cur = conn.cursor()
-    columns = ",".join(doc.keys())
-    placeholders = ":" + ",:".join(doc.keys())
-    try:
-        cur.execute(f"INSERT OR IGNORE INTO documents ({columns}) VALUES ({placeholders})", doc)
-        conn.commit()
-        if cur.lastrowid:
-            return int(cur.lastrowid)
-        return None
-    finally:
-        conn.close()
+    def _insert():
+        conn = get_db()
+        cur = conn.cursor()
+        columns = ",".join(doc.keys())
+        placeholders = ":" + ",:".join(doc.keys())
+        try:
+            cur.execute(f"INSERT OR IGNORE INTO documents ({columns}) VALUES ({placeholders})", doc)
+            conn.commit()
+            if cur.lastrowid:
+                return int(cur.lastrowid)
+            return None
+        finally:
+            conn.close()
+
+    return _retry_on_busy(_insert)
 
 
 def update_document(doc_id: int, fields: Dict[str, Any]) -> None:
     if not fields:
         return
-    conn = get_db()
-    cur = conn.cursor()
-    sets = ", ".join([f"{k} = :{k}" for k in fields.keys()])
-    fields["id"] = doc_id
-    cur.execute(f"UPDATE documents SET {sets} WHERE id = :id", fields)
-    conn.commit()
-    conn.close()
+
+    def _update():
+        conn = get_db()
+        cur = conn.cursor()
+        sets = ", ".join([f"{k} = :{k}" for k in fields.keys()])
+        fields["id"] = doc_id
+        cur.execute(f"UPDATE documents SET {sets} WHERE id = :id", fields)
+        conn.commit()
+        conn.close()
+
+    _retry_on_busy(_update)
 
 
 def fetch_document(doc_id: int) -> Optional[Dict[str, Any]]:
