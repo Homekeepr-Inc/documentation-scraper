@@ -15,13 +15,9 @@ echo "🚀 Starting deployment..."
 echo "📥 Pulling latest code..."
 git pull
 
-# Build and deploy with docker compose (scale to 2 for zero downtime)
-echo "🚀 Building and deploying with docker compose"
-docker compose up --scale app=2 --build -d
-
-# Scale down to 1 (Docker waits for healthcheck automatically)
-echo "🔄 Scaling down to 1 app instance"
-docker compose up --scale app=1 -d
+# Scale to 4 replicas for production
+echo "🔄 Scaling to 4 app instances"
+docker compose up --scale app=4 -d
 
 # Clean up old images (optional)
 echo "🧹 Cleaning up old images..."
