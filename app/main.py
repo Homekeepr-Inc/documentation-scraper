@@ -35,13 +35,12 @@ SCRAPER_SECRET = os.getenv("SCRAPER_SECRET")
 if SCRAPER_SECRET == None or SCRAPER_SECRET == "":
     raise ValueError("**Security Violation**: SCRAPER_SECRET is an empty string or null!")
 
-# Global flag to track if currently scraping
-is_scraping = False
+
 
 @app.middleware("http")
 async def check_custom_header(request: Request, call_next):
     # Bypass header check for health check endpoints (internal)
-    if request.url.path in ["/health", "/status"]:
+    if request.url.path in ["/health"]:
         response = await call_next(request)
         return response
     header_value = request.headers.get("X-Homekeepr-Scraper")
@@ -61,11 +60,7 @@ def health() -> dict:
     return {"status": "ok"}
 
 
-@app.get("/status")
-def status():
-    if is_scraping:
-        return Response(status_code=503, content="busy")
-    return {"status": "idle"}
+
 
 
 @app.get("/", response_class=HTMLResponse)
@@ -158,8 +153,6 @@ def scrape_brand_model(brand: str, model: str):
         return FileResponse(doc[1], media_type="application/pdf")
 
     # Not cached, scrape synchronously
-    is_scraping = True
-    try:
         if brand == 'ge':
             result = scrape_ge_manual(model)
         elif brand == 'lg':
@@ -238,19 +231,8 @@ def scrape_brand_model(brand: str, model: str):
         if not path:
             raise HTTPException(status_code=404, detail="File not stored locally")
         return FileResponse(path, media_type="application/pdf")
-    finally:
-        is_scraping = False
 
 
-@app.get("/health")
-def health_check():
-    return {"status": "healthy"}
 
-
-@app.get("/status")
-def status_check():
-    if is_scraping:
-        raise HTTPException(status_code=503, detail="Busy")
-    return {"status": "idle"}
 
 
