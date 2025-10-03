@@ -6,5 +6,26 @@
 
 {$DOMAIN_NAME} {
     {$TLS_DIRECTIVE}
-    reverse_proxy app:8000
+
+    # Health check endpoints - only accessible from Docker network
+    @internal {
+        client_ip 172.18.0.0/16  # Docker bridge network range
+        path /health /status
+    }
+    route @internal {
+        reverse_proxy app:8000
+    }
+
+    # Main routes with load balancing
+    route {
+        reverse_proxy {
+            to app:8000
+            to app:8000
+            to app:8000
+            to app:8000
+            lb_policy least_conn
+            health_uri /health
+            fail_duration 30s
+        }
+    }
 }
