@@ -23,6 +23,10 @@ echo "Commit message: $(git log -1 --pretty=%s | cut -c1-20)"
 echo "🔄 Scaling to 4 app instances"
 docker compose up --build --scale app=4 -d
 
+# Reload Caddy config for zero downtime
+echo "🔄 Reloading Caddy config..."
+docker compose exec caddy caddy reload
+
 # Clean up old images (optional)
 echo "🧹 Cleaning up old images..."
 docker image prune -f
