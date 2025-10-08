@@ -92,6 +92,9 @@ export PYTHONPATH=. && python3 -m uvicorn app.main:app --reload
 - **Storage:** Filesystem blobs (`~/home-manuals/`) + SQLite with FTS5
 - **API:** FastAPI with search, metadata, download, and text endpoints
 - **Processing:** pdfminer.six + pypdf for text extraction, langdetect for language
+- **Database Initialization:** Dedicated `db-init` container ensures SQLite schema is created once before app startup, avoiding locking conflicts from concurrent container starts
+- **Error Handling:** Database queries catch operational errors (503 for uninitialized DB, 500 for others); scraping wraps operations in try-except (500 with details); non-existent resources return 404
+- **Logging:** Configured in `app/main.py` for debugging database operations and application flow
 
 ## Data Sources & Coverage
 

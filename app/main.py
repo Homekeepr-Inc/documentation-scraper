@@ -52,11 +52,6 @@ async def check_custom_header(request: Request, call_next):
     return response
 
 
-@app.on_event("startup")
-def _startup() -> None:
-    init_db()
-
-
 @app.get("/health")
 def health() -> dict:
     return {"status": "ok"}
@@ -150,11 +145,17 @@ def scrape_brand_model(brand: str, model: str):
 
     # Check DB for existing document
     from .db import get_db
-    doc = get_db().execute("SELECT id, local_path FROM documents WHERE brand = ? AND model_number = ? AND local_path IS NOT NULL LIMIT 1", (brand, normalized_model)).fetchone()
+    try:
+        doc = get_db().execute("SELECT id, local_path FROM documents WHERE brand = ? AND model_number = ? AND local_path IS NOT NULL LIMIT 1", (brand, normalized_model)).fetchone()
+    except sqlite3.OperationalError as e:
+        if "no such table" in str(e):
+            raise HTTPException(status_code=503, detail="Database not initialized. Please try again later.")
+        raise HTTPException(status_code=500, detail="Database error")
     if doc:
         return FileResponse(doc[1], media_type="application/pdf")
 
     # Not cached, scrape synchronously
+    try:
         if brand == 'ge':
             result = scrape_ge_manual(model)
         elif brand == 'lg':
@@ -173,68 +174,75 @@ def scrape_brand_model(brand: str, model: str):
             result = scrape_rheem_manual(model)
         else:
             result = None
-    
-        if not result:
-            raise HTTPException(status_code=404, detail="No manual found")
-    
-        # Handle case where result is a list (take first result)
-        if isinstance(result, list):
-            result = result[0]
-    
-        # Select ingest function based on brand
-        if brand == 'ge':
-            ingest_func = ingest_ge_manual
-        elif brand == 'lg':
-            ingest_func = ingest_lg_manual
-        elif brand == 'kitchenaid':
-            ingest_func = ingest_kitchenaid_manual
-        elif brand == 'whirlpool':
-            ingest_func = ingest_whirlpool_manual
-        elif brand == 'samsung':
-            ingest_func = ingest_samsung_manual
-        elif brand == 'frigidaire':
-            ingest_func = ingest_frigidaire_manual
-        elif brand == 'aosmith':
-            ingest_func = ingest_aosmith_manual
-        elif brand == 'rheem':
-            ingest_func = ingest_rheem_manual
-    
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Scraping failed: {str(e)}")
+
+    if not result:
+        raise HTTPException(status_code=404, detail="No manual found")
+
+    # Handle case where result is a list (take first result)
+    if isinstance(result, list):
+        result = result[0]
+
+    # Select ingest function based on brand
+    if brand == 'ge':
+        ingest_func = ingest_ge_manual
+    elif brand == 'lg':
+        ingest_func = ingest_lg_manual
+    elif brand == 'kitchenaid':
+        ingest_func = ingest_kitchenaid_manual
+    elif brand == 'whirlpool':
+        ingest_func = ingest_whirlpool_manual
+    elif brand == 'samsung':
+        ingest_func = ingest_samsung_manual
+    elif brand == 'frigidaire':
+        ingest_func = ingest_frigidaire_manual
+    elif brand == 'aosmith':
+        ingest_func = ingest_aosmith_manual
+    elif brand == 'rheem':
+        ingest_func = ingest_rheem_manual
+
+    try:
         ingest_result = ingest_func(result)
-        if not ingest_result or not ingest_result.id:
-            # Check if already exists
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Ingest failed: {str(e)}")
+
+    if not ingest_result or not ingest_result.id:
+        # Check if already exists
+        try:
             doc = get_db().execute("SELECT id FROM documents WHERE file_url = ?", (result['file_url'],)).fetchone()
-            if doc:
-                doc_id = doc[0]
-            else:
-                raise HTTPException(status_code=500, detail="Failed to ingest")
+        except sqlite3.OperationalError as e:
+            if "no such table" in str(e):
+                raise HTTPException(status_code=503, detail="Database not initialized. Please try again later.")
+            raise HTTPException(status_code=500, detail="Database error")
+        if doc:
+            doc_id = doc[0]
         else:
-            doc_id = ingest_result.id
-    
-        # Clean up temp directory if it exists
-        if result and result.get('local_path'):
-            temp_dir = os.path.dirname(result['local_path'])
-            scraper_temp_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'headless-browser-scraper', 'temp'))
-            temp_dir = os.path.abspath(temp_dir)
-            if temp_dir and os.path.exists(temp_dir):
-                try:
-                    # Use commonpath for reliable subdirectory check
-                    common = os.path.commonpath([scraper_temp_dir, temp_dir])
-                    if common == scraper_temp_dir:
-                        shutil.rmtree(temp_dir)
-                        print(f"Cleaned up temp dir: {temp_dir}")
-                except (ValueError, OSError) as e:
-                    print(f"Error cleaning temp dir {temp_dir}: {e}")
-    
-        # Serve the file
-        doc = fetch_document(doc_id)
-        if not doc:
-            raise HTTPException(status_code=404, detail="Document not found")
-        path = doc.get("local_path")
-        if not path:
-            raise HTTPException(status_code=404, detail="File not stored locally")
-        return FileResponse(path, media_type="application/pdf")
+            raise HTTPException(status_code=500, detail="Failed to ingest")
+    else:
+        doc_id = ingest_result.id
 
+    # Clean up temp directory if it exists
+    if result and result.get('local_path'):
+        temp_dir = os.path.dirname(result['local_path'])
+        scraper_temp_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'headless-browser-scraper', 'temp'))
+        temp_dir = os.path.abspath(temp_dir)
+        if temp_dir and os.path.exists(temp_dir):
+            try:
+                # Use commonpath for reliable subdirectory check
+                common = os.path.commonpath([scraper_temp_dir, temp_dir])
+                if common == scraper_temp_dir:
+                    shutil.rmtree(temp_dir)
+                    print(f"Cleaned up temp dir: {temp_dir}")
+            except (ValueError, OSError) as e:
+                print(f"Error cleaning temp dir {temp_dir}: {e}")
 
-
-
+    # Serve the file
+    doc = fetch_document(doc_id)
+    if not doc:
+        raise HTTPException(status_code=404, detail="Document not found")
+    path = doc.get("local_path")
+    if not path:
+        raise HTTPException(status_code=404, detail="File not stored locally")
+    return FileResponse(path, media_type="application/pdf")
 

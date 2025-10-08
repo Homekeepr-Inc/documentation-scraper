@@ -1,4 +1,15 @@
 services:
+  db-init:
+    build: .
+    platform: linux/amd64
+    env_file:
+      - .env
+    volumes:
+      - ./data:/app/data
+    command: ["python", "scripts/init_db.py"]
+    networks:
+      - app_network
+
   app:
     build: .
     platform: linux/amd64
@@ -18,7 +29,10 @@ services:
     networks:
       - app_network
     depends_on:
-      - squid  # Ensure Squid starts first
+      db-init:
+        condition: service_completed_successfully
+      squid:  # Ensure Squid starts first
+        condition: service_started
     deploy:
       replicas: 4  # Scale to multiple instances for parallelism
 
