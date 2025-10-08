@@ -45,6 +45,8 @@ async def check_custom_header(request: Request, call_next):
         return response
     header_value = request.headers.get("X-Homekeepr-Scraper")
     if header_value != SCRAPER_SECRET:
+        print(f"header_value: {header_value}")
+        print(f"SCRAPER_SECRET {SCRAPER_SECRET}")
         return JSONResponse(status_code=401, content={"detail": "Unauthorized"})
     response = await call_next(request)
     return response
