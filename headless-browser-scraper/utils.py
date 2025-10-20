@@ -12,6 +12,7 @@ import os
 from urllib.parse import urljoin
 
 import undetected_chromedriver as uc
+from selenium.webdriver.chrome.options import Options as ChromeOptions
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
@@ -34,10 +35,11 @@ def get_chrome_options(download_dir=None):
         download_dir (str, optional): Directory for downloads. If provided, sets download preferences.
 
     Returns:
-        uc.ChromeOptions: Configured Chrome options
+        ChromeOptions: Configured Chrome options
     """
-    options = uc.ChromeOptions()
-    options.add_argument('--headless')
+    options = ChromeOptions()
+    if os.getenv('HEADLESS', 'true').lower() != 'false':
+        options.add_argument('--headless')
     options.add_argument('--disable-dev-shm-usage')
     options.add_argument('--disable-gpu')
     options.add_argument('--window-size=1280,720')
@@ -68,20 +70,25 @@ def get_chrome_options(download_dir=None):
 
 def create_chrome_driver(options=None, download_dir=None):
     """
-    Create a Chrome driver using undetected-chromedriver with system chromedriver to avoid download concurrency.
+    Create a Chrome driver. Uses auto-download for local testing if USE_TESTING_CHROMEDRIVER=true, otherwise uses system chromedriver for production/Docker.
 
     Args:
-        options (uc.ChromeOptions, optional): Chrome options. If None, uses get_chrome_options().
+        options (ChromeOptions, optional): Chrome options. If None, uses get_chrome_options().
         download_dir (str, optional): Download directory for options.
 
     Returns:
-        uc.Chrome: Chrome driver instance
+        Chrome driver instance
     """
     if options is None:
         options = get_chrome_options(download_dir)
-    # Use system chromedriver to avoid undetected's download
-    driver_executable_path = '/usr/bin/chromedriver'
-    return uc.Chrome(options=options, driver_executable_path=driver_executable_path)
+
+    if os.getenv('USE_TESTING_CHROMEDRIVER') == 'true':
+        # Auto-download chromedriver for local testing (pre-dockerization behavior)
+        return uc.Chrome(options=options)
+    else:
+        # Use system chromedriver for Docker/production
+        driver_executable_path = '/usr/bin/chromedriver'
+        return uc.Chrome(options=options, driver_executable_path=driver_executable_path)
 
 
 def safe_driver_get(driver, url, timeout=15):
