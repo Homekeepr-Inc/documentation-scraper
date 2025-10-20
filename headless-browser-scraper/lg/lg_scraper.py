@@ -240,7 +240,7 @@ def scrape_lg_manual(model):
             # Get the PDF URL from the button
             try:
                 button = WebDriverWait(driver, 5).until(
-                    EC.element_to_be_clickable((By.CSS_SELECTOR, "#simple-tabpanel-1 > div > div > div:nth-child(1) > div > div:nth-child(1)"))
+                    EC.element_to_be_clickable((By.XPATH, "//p[text()=\"Owner's Manual\"]"))
                 )
                 # Skip href check as the div has no href
                 print("Clicking manual item...")
