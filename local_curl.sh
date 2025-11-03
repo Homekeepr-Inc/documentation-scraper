@@ -1,0 +1,1 @@
+curl -k -H "X-Homekeepr-Scraper: test_secret" 'http://localhost:8000/scrape/samsung/LRTLS2403S%20/02'

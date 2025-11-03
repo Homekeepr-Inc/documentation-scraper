@@ -1,0 +1,1 @@
+HEADLESS=false USE_TESTING_CHROMEDRIVER=true SCRAPER_SECRET=test_secret python -m uvicorn app.main:app --reload
