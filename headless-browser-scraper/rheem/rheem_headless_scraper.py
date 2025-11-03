@@ -18,6 +18,7 @@ from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.common.action_chains import ActionChains
+from selenium.common.exceptions import NoSuchElementException
 
 from bs4 import BeautifulSoup, Tag
 import requests
@@ -79,7 +80,57 @@ def rheem_rheem_callback(driver, model):
             print(f"Failed to find or click 'Documentation' button: {e}")
             return None
 
-        manual_link_texts = ["Use and Care Manual", "Use and Care Instructions"]
+        manual_link_texts = ["Use and Care Manual", "Use & Care Manual", "Use and Care Instructions"]
+
+        def try_click_download_button(max_attempts=5, delay=1.0):
+            """Attempt to click the PDF viewer's save button, searching across iframes."""
+            for attempt in range(max_attempts):
+                try:
+                    driver.switch_to.default_content()
+                except Exception as e:
+                    print(f"Attempt {attempt + 1}: failed to switch to default content before locating download button: {e}")
+                    time.sleep(delay)
+                    continue
+
+                try:
+                    button = driver.find_element(By.ID, "downloadButton")
+                    driver.execute_script("arguments[0].click();", button)
+                    driver.switch_to.default_content()
+                    return True
+                except NoSuchElementException:
+                    pass
+                except Exception as e:
+                    print(f"Attempt {attempt + 1}: error clicking download button: {e}")
+                    time.sleep(delay)
+                    continue
+
+                try:
+                    frames = driver.find_elements(By.TAG_NAME, "iframe")
+                except Exception as e:
+                    print(f"Attempt {attempt + 1}: unable to enumerate iframes: {e}")
+                    frames = []
+
+                for frame in frames:
+                    try:
+                        driver.switch_to.default_content()
+                        driver.switch_to.frame(frame)
+                        button = driver.find_element(By.ID, "downloadButton")
+                        driver.execute_script("arguments[0].click();", button)
+                        driver.switch_to.default_content()
+                        return True
+                    except NoSuchElementException:
+                        continue
+                    except Exception as e:
+                        print(f"Attempt {attempt + 1}: error clicking download button inside iframe: {e}")
+                        continue
+
+                time.sleep(delay)
+
+            try:
+                driver.switch_to.default_content()
+            except Exception:
+                pass
+            return False
 
         # Click the first matching "Use and Care ..." link
         manual_link = None
@@ -151,15 +202,18 @@ def rheem_rheem_callback(driver, model):
             except Exception as e:
                 print(f"No second '{label}' link found or clickable: {e}")
 
+        if download_link is None:
+            print("No secondary manual link found; checking for PDF viewer save button.")
+            if try_click_download_button():
+                print("Clicked PDF viewer save button.")
+            else:
+                print("PDF viewer save button not found; assuming viewer already opened PDF.")
+
         if not file_url:
             file_url = driver.current_url if driver.current_url != 'about:blank' else manual_href
 
         if not title:
             title = clicked_label or "Rheem Use and Care Manual"
-
-        if download_link is None:
-            print("No secondary manual link found; assuming current page is the PDF.")
-            file_url = file_url or manual_href
 
         source_url = driver.current_url if driver.current_url != 'about:blank' else file_url
         print(f"Extracted file_url: {file_url}, title: {title}, source_url: {source_url}")
