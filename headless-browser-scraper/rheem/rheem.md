@@ -36,7 +36,7 @@ GET /scrape/rheem/{model}
 - Downloads to temp directory, validates PDF, ingests to DB
 
 
-curl -k -H "X-Homekeepr-Scraper: $SCRAPER_SECRET" 'https://localhost/scrape/rheem/XG40T06EN38U1'
+curl -k -H "X-Homekeepr-Scraper: $SCRAPER_SECRET" 'https://localhost/scrape/rheem/XG40T06EN38U0'
 curl -k -H "X-Homekeepr-Scraper: $SCRAPER_SECRET" 'https://localhost/scrape/rheem/ECO200XELN-3'
 curl -k -H "X-Homekeepr-Scraper: $SCRAPER_SECRET" 'https://localhost/scrape/rheem/XE40M06ST45U1'
 curl -k -H "X-Homekeepr-Scraper: $SCRAPER_SECRET" 'https://localhost/scrape/rheem/XG50T06EC38U1'
