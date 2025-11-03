@@ -9,7 +9,8 @@ headless browser scrapers, such as fallback mechanisms.
 import time
 import random
 import os
-from urllib.parse import urljoin
+from urllib.parse import urljoin, urlparse
+from typing import Iterable, List, Optional
 
 import undetected_chromedriver as uc
 from selenium.webdriver.chrome.options import Options as ChromeOptions
@@ -25,6 +26,39 @@ import shutil
 
 # Import config for BLOB_ROOT and PROXY_URL
 from app.config import DEFAULT_BLOB_ROOT, PROXY_URL
+
+
+def generate_model_candidates(model: str, max_trim: int = 3, min_length: int = 5) -> List[str]:
+    """Create a list of progressively truncated model numbers for fuzzy matching."""
+
+    if not model:
+        return []
+
+    normalized = model.strip()
+    if not normalized:
+        return []
+
+    candidates: List[str] = []
+    for trim in range(0, max_trim + 1):
+        candidate = normalized if trim == 0 else normalized[:-trim]
+        if not candidate or len(candidate) < min_length:
+            continue
+        if candidate not in candidates:
+            candidates.append(candidate)
+    return candidates
+
+
+def match_model_in_text(text: str, model: str, max_trim: int = 3) -> Optional[str]:
+    """Return the first candidate model variant discovered in the provided text."""
+
+    if not text:
+        return None
+
+    lowered = text.lower()
+    for candidate in generate_model_candidates(model, max_trim=max_trim):
+        if candidate.lower() in lowered:
+            return candidate
+    return None
 
 
 def get_chrome_options(download_dir=None):
@@ -84,11 +118,40 @@ def create_chrome_driver(options=None, download_dir=None):
 
     if os.getenv('USE_TESTING_CHROMEDRIVER') == 'true':
         # Auto-download chromedriver for local testing (pre-dockerization behavior)
-        return uc.Chrome(options=options)
+        driver = uc.Chrome(options=options)
     else:
         # Use system chromedriver for Docker/production
         driver_executable_path = '/usr/bin/chromedriver'
-        return uc.Chrome(options=options, driver_executable_path=driver_executable_path)
+        driver = uc.Chrome(options=options, driver_executable_path=driver_executable_path)
+
+    target_download_dir = download_dir
+    if not target_download_dir and options is not None:
+        try:
+            download_prefs = {}
+            prefs_container = getattr(options, "experimental_options", None)
+            if not prefs_container and hasattr(options, "_experimental_options"):
+                prefs_container = getattr(options, "_experimental_options")
+            if isinstance(prefs_container, dict):
+                download_prefs = prefs_container.get("prefs", {}) or {}
+            if download_prefs:
+                target_download_dir = download_prefs.get("download.default_directory")
+        except Exception:
+            target_download_dir = None
+
+    if target_download_dir:
+        try:
+            driver.execute_cdp_cmd(
+                "Page.setDownloadBehavior",
+                {
+                    "behavior": "allow",
+                    "downloadPath": target_download_dir,
+                    "eventsEnabled": True,
+                },
+            )
+        except Exception as err:
+            print(f"Failed to enable Chrome downloads to {target_download_dir}: {err}")
+
+    return driver
 
 
 def safe_driver_get(driver, url, timeout=15):
@@ -111,76 +174,305 @@ def safe_driver_get(driver, url, timeout=15):
         print(f"Page load timed out after {timeout} seconds for {url}, continuing anyway.")
 
 
-def duckduckgo_fallback(driver, model, host_url, scrape_callback, search_query=None):
+def _normalize_host(host: str) -> str:
+    """Normalize a host/domain string for comparison purposes."""
+
+    if not host:
+        return ""
+
+    candidate = host.strip().lower()
+    if not candidate:
+        return ""
+
+    if "://" not in candidate:
+        candidate = f"https://{candidate}"
+
+    parsed = urlparse(candidate)
+    return parsed.netloc or parsed.path or ""
+
+
+def duckduckgo_fallback(
+    driver,
+    model,
+    host_url,
+    scrape_callback,
+    search_query=None,
+    max_model_trim: int = 0,
+    allowed_hosts: Optional[Iterable[str]] = None,
+    disallowed_url_substrings: Optional[Iterable[str]] = None,
+):
     """
     Generic DuckDuckGo fallback mechanism for finding manuals when direct scraping fails.
 
-    This function performs a DuckDuckGo search for the model number, finds a trusted link
-    from the specified host, navigates to it, and then calls the provided callback function
-    to perform brand-specific scraping.
-
-    Args:
-        driver: Active Selenium WebDriver instance
-        model (str): The model number to search for
-        host_url (str): Trusted domain to filter search results (e.g., 'lg.com/us', 'whirlpool.com')
-        scrape_callback (callable): Function to call after navigating to the brand's site.
-                                    Should accept the driver as parameter and return scraping result.
-        search_query (str, optional): Custom search query to use. Defaults to f"\"{model}\" owner's manual site:{host_url}"
-
-    Returns:
-        dict: Scraped data from the callback function, or None if fallback fails
+    Attempts the provided search query (or a default one) and progressively trims the trailing
+    characters from the model number when `max_model_trim` is greater than zero. Restrict results
+    with `allowed_hosts`, exclude known-bad URLs via `disallowed_url_substrings`, and skip direct
+    PDF links to avoid bypassing product detail pages the callbacks depend on.
     """
+
     print(f"Attempting DuckDuckGo fallback for {model} on {host_url}...")
 
-    try:
-        # Navigate to DuckDuckGo search.
-        if search_query is None:
-            search_query = f"{model} owner's manual site:{host_url}"
-        safe_driver_get(driver, f"https://duckduckgo.com/?q={search_query}")
+    variants = generate_model_candidates(model, max_trim=max_model_trim)
+    if not variants:
+        variants = [model]
 
-        print(f"DuckDuckGo search loaded for: {search_query}")
+    # Ensure the exact model is first in the list
+    if model not in variants:
+        variants.insert(0, model)
 
-        # Wait for search results to appear.
-        WebDriverWait(driver, 5).until(
-            EC.presence_of_element_located((By.CSS_SELECTOR, "a[data-testid='result-title-a']"))
-        )
+    base_query = search_query
+    tried_queries = set()
 
-        # Find the first result link that contains the trusted host.
-        # DuckDuckGo uses different selectors, so we try the most common ones.
-        result_links = driver.find_elements(By.CSS_SELECTOR, "a[data-testid='result-title-a'], .result__a, .result__url")
+    host_url_lower = host_url.lower() if host_url else ""
 
-        trusted_link = None
-        for link in result_links:
-            href = link.get_attribute('href')
-            # Skip DuckDuckGo internal links (e.g., related searches suggested by DDG that link back to duckduckgo.com)
-            if href and 'duckduckgo.com' in href.lower():
+    normalized_allowed_hosts = None
+    normalized_disallowed = None
+    if allowed_hosts:
+        normalized_allowed_hosts = set()
+        for host in allowed_hosts:
+            normalized = _normalize_host(host)
+            if normalized:
+                normalized_allowed_hosts.add(normalized)
+        if not normalized_allowed_hosts:
+            normalized_allowed_hosts = None
+    if disallowed_url_substrings:
+        normalized_disallowed = [
+            substring.lower()
+            for substring in disallowed_url_substrings
+            if substring
+        ]
+        if not normalized_disallowed:
+            normalized_disallowed = None
+
+    for variant in variants:
+        if base_query is None:
+            query = f"\"{variant}\" site:{host_url}"
+        else:
+            if '{model}' in base_query:
+                query = base_query.format(model=variant)
+            elif model and model in base_query:
+                query = base_query.replace(model, variant)
+            else:
+                query = base_query
+
+        if query in tried_queries:
+            continue
+        tried_queries.add(query)
+
+        try:
+            print(f"Running DuckDuckGo search for query: {query}")
+            safe_driver_get(driver, f"https://duckduckgo.com/?q={query}")
+            print(f"DuckDuckGo search loaded for query: {query}")
+
+            WebDriverWait(driver, 5).until(
+                EC.presence_of_element_located((By.CSS_SELECTOR, "a[data-testid='result-title-a']"))
+            )
+
+            result_links = driver.find_elements(By.CSS_SELECTOR, "a[data-testid='result-title-a'], .result__a, .result__url")
+
+            trusted_link = None
+            for link in result_links:
+                href = link.get_attribute('href')
+                if href and 'duckduckgo.com' in href.lower():
+                    continue
+                if not href:
+                    continue
+
+                href_lower = href.lower()
+                parsed = urlparse(href_lower)
+                path_lower = parsed.path or ""
+                if path_lower.endswith(".pdf") or ".pdf" in href_lower:
+                    print(f"Ignoring candidate link for query '{query}' because it points directly to a PDF: {href}")
+                    continue
+
+                if normalized_disallowed and any(substring in href_lower for substring in normalized_disallowed):
+                    print(
+                        f"Ignoring candidate link for query '{query}' due to disallowed substring match: {href}"
+                    )
+                    continue
+
+                if normalized_allowed_hosts:
+                    link_host = (parsed.netloc or "").lower()
+                    if link_host in normalized_allowed_hosts:
+                        print(f"Found trusted link for query '{query}': {href}")
+                        trusted_link = link
+                        break
+                    else:
+                        print(f"Ignoring candidate link for query '{query}' due to unmatched host '{link_host}': {href}")
+                        continue
+                elif host_url_lower and host_url_lower in href_lower:
+                    print(f"Found trusted link for query '{query}': {href}")
+                    trusted_link = link
+                    break
+
+            if not trusted_link:
+                print(f"No trusted link found for {host_url} using query '{query}'")
                 continue
-            if href and host_url in href.lower():
-                print(f"Found trusted link: {href}")
-                trusted_link = link
+
+            try:
+                trusted_link.click()
+                time.sleep(0.2)
+                print(f"Navigated to: {driver.current_url}")
+                return scrape_callback(driver)
+            except Exception as e:
+                print(f"Navigation failed: {e}, attempting callback anyway on current page")
+                try:
+                    return scrape_callback(driver)
+                except Exception as e2:
+                    print(f"Callback failed anyway: {e2}")
+                    return None
+
+        except Exception as e:
+            print(f"DuckDuckGo search attempt failed for query '{query}': {e}")
+            continue
+
+    print(f"DuckDuckGo fallback failed for {model} after trying {len(tried_queries)} queries.")
+    return None
+
+
+def _case_insensitive_xpath(tag: str, text: str) -> str:
+    """Construct a case-insensitive XPath expression for the supplied tag/text."""
+
+    lowered = text.lower()
+    return (
+        f"//{tag}[contains(translate(normalize-space(string(.)), "
+        "'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), "
+        f"'{lowered}')]"
+    )
+
+
+def _find_link_with_text(driver, text: str):
+    """Find an anchor element matching the text value, ignoring case where necessary."""
+
+    strategies = [
+        (By.LINK_TEXT, text),
+        (By.PARTIAL_LINK_TEXT, text),
+    ]
+    for by, value in strategies:
+        try:
+            return driver.find_element(by, value)
+        except Exception:
+            continue
+
+    try:
+        elements = driver.find_elements(By.XPATH, _case_insensitive_xpath('a', text))
+        if elements:
+            return elements[0]
+    except Exception:
+        pass
+    return None
+
+
+def homedepot_manual_callback(
+    driver,
+    model: str,
+    *,
+    manual_link_texts: Optional[Iterable[str]] = None,
+    expand_headers: Optional[Iterable[str]] = None,
+    scroll_offsets: Optional[Iterable[int]] = None,
+    max_model_trim: int = 3,
+    wait_for_header: int = 5,
+    wait_for_manual_link: int = 10,
+):
+    """Generic HomeDepot.com manual scraping callback for DuckDuckGo fallback flows."""
+
+    try:
+        print(f"Starting Home Depot callback for model {model}")
+        WebDriverWait(driver, 10).until(
+            EC.presence_of_element_located((By.TAG_NAME, 'body'))
+        )
+        print("Home Depot page body loaded.")
+
+        page_source = driver.page_source or ""
+        matched_model = match_model_in_text(page_source, model, max_trim=max_model_trim)
+        if matched_model:
+            print(f"Matched model variant on page: {matched_model}")
+        else:
+            print("No direct model match found in page source; continuing with manual search.")
+
+        offsets = list(scroll_offsets) if scroll_offsets is not None else [400, 800, 1200]
+        for offset in offsets:
+            try:
+                driver.execute_script("window.scrollTo(0, arguments[0]);", offset)
+                time.sleep(0.2)
+            except Exception as scroll_err:
+                print(f"Scrolling to offset {offset} failed: {scroll_err}")
+
+        headers = list(expand_headers) if expand_headers is not None else ["Product Details"]
+        for header in headers:
+            try:
+                header_locator = (
+                    By.XPATH,
+                    _case_insensitive_xpath('h3', header)
+                )
+                element = WebDriverWait(driver, wait_for_header).until(
+                    EC.element_to_be_clickable(header_locator)
+                )
+                driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", element)
+                time.sleep(0.2)
+                driver.execute_script("arguments[0].click();", element)
+                print(f"Expanded section '{header}'.")
+                time.sleep(0.2)
+            except Exception as header_err:
+                print(f"Failed to expand section '{header}': {header_err}")
+
+        texts = list(manual_link_texts) if manual_link_texts is not None else [
+            "Use and Care Manual",
+            "Use & Care Manual",
+            "Owner's Manual",
+        ]
+
+        manual_link = None
+        for text in texts:
+            manual_link = _find_link_with_text(driver, text)
+            if manual_link:
+                print(f"Found manual link using text '{text}'.")
                 break
 
-        if not trusted_link:
-            print(f"No trusted link found for {host_url}")
+        if not manual_link:
+            print("Failed to locate manual link on Home Depot page.")
             return None
 
-        # Otherwise, click the link to navigate to the page
-        try:
-            trusted_link.click()
-            time.sleep(0.2)
-            print(f"Navigated to: {driver.current_url}")
-            # Call the brand-specific scraping callback.
-            return scrape_callback(driver)
-        except Exception as e:
-            print(f"Navigation failed: {e}, attempting callback anyway on current page")
-            try:
-                return scrape_callback(driver)
-            except Exception as e2:
-                print(f"Callback failed anyway: {e2}")
-                return None
+        WebDriverWait(driver, wait_for_manual_link).until(
+            EC.element_to_be_clickable(manual_link)
+        )
 
-    except Exception as e:
-        print(f"DuckDuckGo fallback failed: {e}")
+        driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", manual_link)
+        time.sleep(0.2)
+        driver.execute_script("arguments[0].click();", manual_link)
+
+        file_url = manual_link.get_attribute("href")
+        if file_url:
+            file_url = urljoin(driver.current_url, file_url)
+
+        if file_url:
+            print(f"Navigating to manual URL: {file_url}")
+            safe_driver_get(driver, file_url)
+            time.sleep(0.2)
+        else:
+            print("Manual link missing href; relying on navigation after click.")
+
+        if len(driver.window_handles) > 1:
+            print("New window detected for manual, switching...")
+            current_handle = driver.current_window_handle
+            for handle in driver.window_handles:
+                if handle != current_handle:
+                    driver.switch_to.window(handle)
+                    time.sleep(0.2)
+                    break
+
+        source_url = driver.current_url if driver.current_url != 'about:blank' else file_url
+        final_title = manual_link.text.strip() if manual_link.text else "Home Depot Manual"
+
+        return {
+            'file_url': file_url or source_url,
+            'title': final_title,
+            'source_url': source_url,
+            'matched_model': matched_model,
+        }
+
+    except Exception as err:
+        print(f"Error in Home Depot callback: {err}")
         return None
 
 
