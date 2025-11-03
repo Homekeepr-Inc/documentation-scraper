@@ -46,5 +46,11 @@ The script handles pulling the latest code, building the new image, and graceful
 ## Accessing the App
 Once deployed, the application will be available at `https://api.homekeepr.co`.
 
+## Access Logs
+- **Where they live:** Caddy writes JSON access logs (path, status code, latency, etc.) to `./caddy/logs/access.log` on the host. Docker mounts this directory into the container at `/var/log/caddy` and automatically rotates the file at ~20 MB.
+- **Tail on demand:** `ssh user@vps 'cd /path/to/documentation-scraper && docker compose logs --since 1h caddy | jq'`
+- **Grab a snapshot for sharing:** `ssh user@vps 'cd /path/to/documentation-scraper && tar czf - caddy/logs/access.log*' > caddy-logs.tar.gz`
+- **Optional:** To watch live during a meeting, run `ssh user@vps 'cd /path/to/documentation-scraper && docker compose logs --follow caddy'` in a terminal tab or tmux pane.
+
 ## Local Development
 For instructions on how to run the application on a local machine, please see the "Local Development Setup" section in the main `README.md` file.
