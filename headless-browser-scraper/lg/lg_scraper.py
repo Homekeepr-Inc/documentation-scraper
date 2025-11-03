@@ -244,7 +244,11 @@ def scrape_lg_manual(model):
                 )
                 # Skip href check as the div has no href
                 print("Clicking manual item...")
-                button.click()
+                files_before = set(os.listdir(download_dir))
+                # Use JS click to avoid interception
+                driver.execute_script("arguments[0].scrollIntoView();", button)
+                time.sleep(0.2)
+                driver.execute_script("arguments[0].click();", button)
                 print("Clicked manual item.")
                 # Wait for action
                 time.sleep(2)
@@ -268,11 +272,17 @@ def scrape_lg_manual(model):
                     driver.switch_to.window(windows[0])
                 else:
                     # Wait for download
-                    pdf_url = wait_for_download(download_dir, timeout=10)
+                    print(f"Files in download_dir before wait: {os.listdir(download_dir)}")
+                    print(f"Starting wait_for_download with timeout=30 in {download_dir}")
+                    pdf_url = wait_for_download(download_dir, timeout=30)
+                    print(f"Files in download_dir after wait: {os.listdir(download_dir)}")
                     if pdf_url:
                         print(f"Downloaded PDF: {pdf_url}")
                     else:
                         print("No PDF downloaded within timeout")
+                        crdownload_files = [f for f in os.listdir(download_dir) if f.endswith('.crdownload')]
+                        if crdownload_files:
+                            print(f"Found partial download files: {crdownload_files}. Download may be slow or stuck.")
                         pdf_url = None
             except Exception as e:
                 print(f"Error getting PDF URL: {e}")
