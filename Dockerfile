@@ -2,10 +2,10 @@ FROM selenium/standalone-chrome
 
 USER root
 
-# Install Python 3.11
-RUN apt-get update && apt-get install -y \
-    software-properties-common \
-    && add-apt-repository ppa:deadsnakes/ppa \
+# Install Python 3.11 from deadsnakes PPA without add-apt-repository
+RUN apt-get update \
+    && apt-get install -y curl gnupg lsb-release \
+    && mkdir -p /etc/apt/keyrings \
     && apt-get update \
     && apt-get install -y python3.11 \
     && apt-get clean \
