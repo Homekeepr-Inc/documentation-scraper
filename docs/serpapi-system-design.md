@@ -60,13 +60,15 @@
 3. **Query Construction**: Build brand-specific query string(s). Allow multiple variants (owner's manual, installation guide) per invocation based on user intent.
 4. **SerpApi Call**: Call `/search.json` with API key, location (default Austin), `engine=google`, and query. Log `search_metadata.id` for traceability. SerpApi always runs before any headless scraper regardless of brand.
 5. **Result Filtering**:
-   - Keep URLs ending in `.pdf` or flagged as PDF in `mime`.
-   - Score results using heuristics: presence of model number, doc_type keywords (`owner`, `tech sheet`, `installation`), domain allowlist.
-   - Drop duplicates by URL and canonical file name.
+   - Keep only candidates whose URL looks like a PDF (strip query params and require a `.pdf` suffix); drop everything else immediately.
+   - Score each candidate deterministically: +40/+30/+20 for model matches in URL/title/snippet, +20 for domain allowlist hit, +25/+15/+10 depending on inferred doc_type (`owner`/`installation`/`tech`), and a small boost for higher SERP positions.
+   - Seed `doc_type` inference from title + URL keywords (owner, installation, tech, spec, guide) and carry the score along with query metadata.
+   - Deduplicate by exact URL before download, then sort by score and attempt the top five results per query.
 6. **Validation Fetch**:
-   - Stream download highest-ranked PDF to temp directory.
-   - Validate file type, ensure model_number appears in text (re-use `validate_and_ingest_manual`).
-   - If validation fails, move to next candidate; log failure reason (mismatch, corrupt, access denied).
+   - Stream download the highest-ranked remaining candidate into a temp directory.
+   - Run `evaluate_pdf_candidate`, which inspects up to the first six pages (20k chars) with `pypdf` to compute `pdf_features` (keyword hits per doc type, marketing signals, manual token count, model presence, page count).
+   - Reject early if heuristics fail: owner manuals shorter than four pages, marketing-weighted PDFs, absence of owner keywords, or failed text extraction unless the fallback image-manual rules apply.
+   - Persist structured `pdf_features` + rejection reason in logs/metadata; on failure clean up and try the next candidate.
 7. **Ingestion & Quality Checks (Done in Supabase)**:
    - On success, move file to blob storage, compute checksum, capture metadata.
    - Emit job record to ingestion queue for text extraction, chunking, embedding.
@@ -86,16 +88,25 @@
 - Capture `search_metadata` and `organic_results` snapshot for debugging (store lightweight JSON in observability bucket).
 
 ### Result Scorer & Filter
-- Heuristics tuned per brand:
-  - Domain allowlist (e.g., `whirlpool.com`, `assets.brand.com`).
-  - Keyword boosts (owner, manual, guide, spec sheet) and penalties (marketing, rebate).
-  - Model number exact match vs. fuzzy (tokenized uppercase comparison).
-- Expose score thresholds via config so ops can adjust without redeploy.
+- Deterministic score built from SerpApi payload:
+  - +40/+30/+20 for model matches in URL/title/snippet (case-insensitive).
+  - +20 when the candidate domain matches the brand allowlist.
+  - +25/+15/+10 based on inferred doc_type (`owner`, `installation`, `tech` respectively) determined from title/URL keywords; default to `owner` when unknown.
+  - + (12 - SERP position) to slightly reward higher-ranked organic results.
+- Doc type inference seeds downstream validation; only `owner`, `installation`, and `tech` candidates move forward after PDF analysis.
+- Duplicates (same URL) are skipped; orchestrator keeps a `seen_urls` set across all result buckets before sorting by score.
+- Only the top five scored candidates per query are attempted to control download cost.
 
 ### PDF Fetcher & Validator
 - Streams downloads with timeout guard (e.g., 15s) and size ceiling (reject > 25 MB unless brand override).
-- Reuses shared validation pipeline to ensure consistent ingestion.
-- Stores raw PDF alongside metadata to enable dedupe and caching.
+- Performs lightweight MIME/content-type verification before persisting to disk.
+- Analyzes the first six pages (max 20k characters) via `pypdf` to populate `pdf_features`:
+  - Keyword hit counts per doc type (`owner`, `installation`, `tech`, `guide`), marketing keyword counts, manual token counts, model-number presence, text extraction success, page count.
+  - Flags `too_short_for_owner` when page_count < 4 so two-page brochures cannot be accepted as owner manuals.
+  - Sets `fallback_image_manual` only when text is absent but the document is long enough (≥5 pages) to plausibly be a scan.
+- Rejects candidates that fail heuristics: disallowed doc_type, no manual keywords, marketing-heavy with no owner signal, short owner manuals, or invalid PDFs.
+- Provides structured log entries (`serpapi.orchestrator`) for every decision, including `pdf_analysis_reason`, and attaches `pdf_features` to the ingestion metadata for downstream auditing.
+- Cleans up temp directories on every failure to avoid orphan files; only accepted manuals flow into ingestion.
 
 ### Ingestion & Data Quality
 - After validation, enqueue manual for existing LLM extraction pipeline (text extraction, chunking, embedding).
@@ -112,37 +123,29 @@
 
 ## Configuration & Secrets
 - Store SerpApi key in existing secret manager (`SERPAPI_KEY`).
-- Config file (YAML/JSON) for per-brand templates, allowlists, scoring weights, rate limit settings.
+- Per-brand query templates, allowlists, and candidate caps live in `serpapi_scraper/config.py` (dataclass constants checked into the repo today); long term we can externalize this to YAML/JSON if ops needs runtime edits.
 - Feature flag (`SERPAPI_ENABLED`) to toggle new flow per brand during rollout.
 
 ## Monitoring & Alerting
 - Metrics: queries per brand, success/failure counts, average score of accepted PDFs, validation failure reasons, fallback invocations.
-- Logs: structured entries with `brand`, `model_number`, `search_id`, `selected_url`.
+- Logs: structured entries emitted by `serpapi.client` (request lifecycle), `serpapi.orchestrator` (candidate scoring, PDF analysis, rejection reasons), and `ingest` (downstream ingestion) with `brand`, `model`, `search_id`, `candidate_url`, `pdf_analysis_reason`.
 - Alerts:
   - High failure rate per brand (>30% over 1h).
   - SerpApi quota nearing threshold.
   - Download validation failures due to HTML pages masquerading as PDFs.
 
-## Cost & Rate Limit Management
+## Cost & Rate Limit Management 
 - SerpApi free tier exhausted quickly; maintain rolling cost estimation per brand.
 - Batch low-priority requests via queue to smooth peaks.
 - Implement adaptive throttling: if near daily quota, downgrade to headless scrapers or queue jobs for next window.
-
-## Rollout Plan
-1. Instrumentation groundwork: add SerpApi client with dry-run mode logging candidate results only.
-2. Pilot for Whirlpool models already supported; compare manual overlap and ingestion success vs. headless baseline.
-3. Expand to Sub-Zero and Frigidaire with minimal fallback, validate coverage.
-4. Integrate fallback routing and health switching for partially indexed brands.
-5. Deprecate redundant Selenium flows where SerpApi yields 95%+ success over 30-day window.
 
 ## Risks & Mitigations
 - **Incomplete Coverage**: Some domains unindexed; mitigate via health monitors and fallback library.
 - **Result Drift**: Google ranking changes; keep scoring heuristics tunable and monitor manual mismatch alerts.
 - **Quota Exhaustion**: Implement throttling and budget guardrails; maintain headless scrapers as reserve.
-- **False Positives**: Validate model occurrence and leverage DQA pipeline prior to user exposure.
+- **False Positives**: Validate model occurrence and leverage DQA pipeline prior to user exposure (to be handled by data pipeline (yet to be built))
 
 ## Open Questions
 - Do we want to persist the full SerpApi result set for auditing or only top-N?
 - Should we expand beyond PDFs (HTML manuals) and convert them, or leave as future work?
 - How do we prioritize doc types (owner vs. tech sheet) when multiple results exist and the request is ambiguous?
-- What SLA do we expect from SerpApi, and do we need multi-provider fallback (e.g., RapidAPI Google search)?

@@ -239,6 +239,8 @@ def evaluate_pdf_candidate(
     manual_tokens = features["manual_tokens"]
     marketing_hits = features["marketing_hits"]
     page_count = features["page_count"]
+    # Heuristic to avoid counting promo / non owners-manual PDFs incorrectly.
+    features["too_short_for_owner"] = page_count < 4
 
     resolved_doc_type = candidate_doc_type or "owner"
     top_doc_type, top_hits = max(
@@ -259,6 +261,9 @@ def evaluate_pdf_candidate(
     if resolved_doc_type not in ACCEPTABLE_DOC_TYPES:
         accept = False
         reason = f"disallowed_doc_type:{resolved_doc_type}"
+    elif resolved_doc_type == "owner" and page_count < 4:
+        accept = False
+        reason = "owner_manual_too_short"
     elif manual_signal == 0 and not (resolved_doc_type == "owner" and has_manual_tokens):
         accept = False
         reason = "no_manual_keywords"
