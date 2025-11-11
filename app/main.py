@@ -1,3 +1,4 @@
+import logging
 import sys
 import os
 import asyncio
@@ -11,6 +12,7 @@ from fastapi.templating import Jinja2Templates
 from starlette.responses import JSONResponse
 
 from .db import init_db, fetch_document, search_documents
+from .logging_config import setup_logging
 
 # Add path for headless scraper
 sys.path.append(os.path.join(os.path.dirname(__file__), '..', 'headless-browser-scraper'))
@@ -22,18 +24,33 @@ from samsung.samsung_headless_scraper import scrape_samsung_manual, ingest_samsu
 from frigidaire.frigidaire_headless_scraper import scrape_frigidaire_manual, ingest_frigidaire_manual
 from aosmith.aosmith_headless_scraper import scrape_aosmith_manual, ingest_aosmith_manual
 from rheem.rheem_headless_scraper import scrape_rheem_manual, ingest_rheem_manual
+from utils import validate_and_ingest_manual  # type: ignore  # pylint: disable=import-error
+from serpapi_scraper import (
+    fetch_manual_with_serpapi,
+    SerpApiError,
+    SerpApiQuotaError,
+)
 
 templates = Jinja2Templates(directory="app/templates")
 
 def normalize_model(model):
     return model.replace('/', '_')
 
+if not logging.getLogger().handlers:
+    setup_logging(os.getenv("LOG_LEVEL", "INFO"))
+else:
+    logging.getLogger().setLevel(getattr(logging, os.getenv("LOG_LEVEL", "INFO").upper(), logging.INFO))
+
 app = FastAPI(title="Appliance Manuals API")
+logger = logging.getLogger("serpapi.api")
 
 # Custom header secret for API protection
 SCRAPER_SECRET = os.getenv("SCRAPER_SECRET")
 if SCRAPER_SECRET == None or SCRAPER_SECRET == "":
     raise ValueError("**Security Violation**: SCRAPER_SECRET is an empty string or null!")
+
+# Toggle to enable/disable SerpApi globally. Default to enabled.
+SERPAPI_ENABLED = os.getenv("SERPAPI_ENABLED", "true").strip().lower() not in {"false", "0", "no", ""}
 
 # Global flag to track if currently scraping
 is_scraping = False
@@ -144,6 +161,7 @@ def get_document_text(doc_id: int):
 
 @app.get("/scrape/{brand}/{model:path}")
 def scrape_brand_model(brand: str, model: str):
+    global is_scraping  # pylint: disable=global-statement
     brand = brand.lower()
     supported_brands = {'ge', 'lg', 'kitchenaid', 'whirlpool', 'samsung', 'frigidaire', 'aosmith', 'rheem'}
     if brand not in supported_brands:
@@ -160,32 +178,56 @@ def scrape_brand_model(brand: str, model: str):
     # Not cached, scrape synchronously
     is_scraping = True
     try:
-        if brand == 'ge':
-            result = scrape_ge_manual(model)
-        elif brand == 'lg':
-            result = scrape_lg_manual(model)
-        elif brand == 'kitchenaid':
-            result = scrape_kitchenaid_manual(model)
-        elif brand == 'whirlpool':
-            result = scrape_whirlpool_manual(model)
-        elif brand == 'samsung':
-            result = scrape_samsung_manual(model)
-        elif brand == 'frigidaire':
-            result = scrape_frigidaire_manual(model)
-        elif brand == 'aosmith':
-            result = scrape_aosmith_manual(model)
-        elif brand == 'rheem':
-            result = scrape_rheem_manual(model)
-        else:
-            result = None
-    
+        result = None
+
+        if SERPAPI_ENABLED:
+            try:
+                serpapi_result = fetch_manual_with_serpapi(brand, model)
+                if serpapi_result:
+                    result = serpapi_result
+            except SerpApiQuotaError as exc:
+                # Log and fall back to brand-specific scraper
+                logger.warning(
+                    "SerpApi quota exceeded for brand=%s model=%s: %s",
+                    brand,
+                    model,
+                    exc,
+                )
+            except SerpApiError as exc:
+                # Log and fall back silently
+                logger.warning(
+                    "SerpApi error for brand=%s model=%s: %s",
+                    brand,
+                    model,
+                    exc,
+                )
+
+        if result is None:
+            if brand == 'ge':
+                result = scrape_ge_manual(model)
+            elif brand == 'lg':
+                result = scrape_lg_manual(model)
+            elif brand == 'kitchenaid':
+                result = scrape_kitchenaid_manual(model)
+            elif brand == 'whirlpool':
+                result = scrape_whirlpool_manual(model)
+            elif brand == 'samsung':
+                result = scrape_samsung_manual(model)
+            elif brand == 'frigidaire':
+                result = scrape_frigidaire_manual(model)
+            elif brand == 'aosmith':
+                result = scrape_aosmith_manual(model)
+            elif brand == 'rheem':
+                result = scrape_rheem_manual(model)
+            else:
+                result = None
+
         if not result:
             raise HTTPException(status_code=404, detail="No manual found")
     
         # Handle case where result is a list (take first result)
         if isinstance(result, list):
             result = result[0]
-    
         # Select ingest function based on brand
         if brand == 'ge':
             ingest_func = ingest_ge_manual
@@ -252,5 +294,3 @@ def status_check():
     if is_scraping:
         raise HTTPException(status_code=503, detail="Busy")
     return {"status": "idle"}
-
-

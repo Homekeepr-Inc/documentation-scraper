@@ -40,12 +40,21 @@ python3 setup.py
 # 2. Load maximum dataset (recommended)  
 export PYTHONPATH=. && python3 scripts/cli.py max-scale
 
-# 3. Browse your data
-export PYTHONPATH=. && python3 -m uvicorn app.main:app --reload
+# 3. Run the API locally (Chrome + chromedriver required)
+#    - install Chrome (stable) and chromedriver (e.g. `brew install chromedriver`)
+#    - optional: export CHROMEDRIVER_PATH=/custom/path if it is not on your PATH
+export PYTHONPATH=. && HEADLESS=false python3 -m uvicorn app.main:app --reload
 # Visit: http://localhost:8000
 ```
 
 **Result**: Comprehensive home equipment documentation corpus with web interface.
+
+### Chromedriver tips (local runs)
+
+- The scraper now auto-detects `chromedriver` from `CHROMEDRIVER_PATH`, your shell `PATH`, or common install locations (`/opt/homebrew/bin`, `/usr/local/bin`, `/usr/bin`).
+- If the bundled driver fails to launch, it automatically retries using `undetected-chromedriver`'s managed download.
+- Set `CHROME_BINARY_PATH` (or `GOOGLE_CHROME_BINARY`) if Chrome lives outside the default locations (macOS `/Applications/Google Chrome.app/...`, Linux `/usr/bin/google-chrome`).
+- Use `launch_local.sh` for a ready-to-run example: `chmod +x launch_local.sh && ./launch_local.sh`.
 
 ## Architecture Overview
 

@@ -36,11 +36,22 @@ GET /scrape/rheem/{model}
 - Downloads to temp directory, validates PDF, ingests to DB
 
 
+# docker compose curls
 curl -k -H "X-Homekeepr-Scraper: $SCRAPER_SECRET" 'https://localhost/scrape/rheem/XG40T06EN38U0'
-curl -k -H "X-Homekeepr-Scraper: $SCRAPER_SECRET" 'https://localhost/scrape/rheem/ECO200XELN-3'
-curl -k -H "X-Homekeepr-Scraper: $SCRAPER_SECRET" 'https://localhost/scrape/rheem/XE40M06ST45U1'
-curl -k -H "X-Homekeepr-Scraper: $SCRAPER_SECRET" 'https://localhost/scrape/rheem/XG50T06EC38U1'
-curl -k -H "X-Homekeepr-Scraper: $SCRAPER_SECRET" 'https://localhost/scrape/rheem/PROG50-42N-RU67-PV'
-curl -k -H "X-Homekeepr-Scraper: $SCRAPER_SECRET" 'https://localhost/scrape/rheem/XG40T12HE40U0'
-curl -k -H "X-Homekeepr-Scraper: $SCRAPER_SECRET" 'https://localhost/scrape/rheem/RTGH-95DVLN-3'
-curl -k -H "X-Homekeepr-Scraper: $SCRAPER_SECRET" 'https://localhost/scrape/rheem/RTG-95XLN-1'
+curl -k -H "X-Homekeepr-Scraper: $SCRAPER_SECRET" 'https://localhost/scrape/rheem/ECO200XELN-3' &
+curl -k -H "X-Homekeepr-Scraper: $SCRAPER_SECRET" 'https://localhost/scrape/rheem/XE40M06ST45U1' &
+curl -k -H "X-Homekeepr-Scraper: $SCRAPER_SECRET" 'https://localhost/scrape/rheem/XG50T06EC38U1' &
+curl -k -H "X-Homekeepr-Scraper: $SCRAPER_SECRET" 'https://localhost/scrape/rheem/PROG50-42N-RU67-PV' &
+curl -k -H "X-Homekeepr-Scraper: $SCRAPER_SECRET" 'https://localhost/scrape/rheem/XG40T12HE40U0' &
+curl -k -H "X-Homekeepr-Scraper: $SCRAPER_SECRET" 'https://localhost/scrape/rheem/RTGH-95DVLN-3' &
+curl -k -H "X-Homekeepr-Scraper: $SCRAPER_SECRET" 'https://localhost/scrape/rheem/RTG-95XLN-1' &
+
+# raw dog the service curls
+curl -k -H "X-Homekeepr-Scraper: $SCRAPER_SECRET" 'http://localhost:8000/scrape/rheem/XG40T06EN38U0' --output a.pdf &&
+curl -k -H "X-Homekeepr-Scraper: $SCRAPER_SECRET" 'http://localhost:8000/scrape/rheem/ECO200XELN-3'  --output b.pdf &&
+curl -k -H "X-Homekeepr-Scraper: $SCRAPER_SECRET" 'http://localhost:8000/scrape/rheem/XE40M06ST45U1'  --output c.pdf &&
+curl -k -H "X-Homekeepr-Scraper: $SCRAPER_SECRET" 'http://localhost:8000/scrape/rheem/XG50T06EC38U1'  --output d.pdf &&
+curl -k -H "X-Homekeepr-Scraper: $SCRAPER_SECRET" 'http://localhost:8000/scrape/rheem/PROG50-42N-RU67-PV'  --output e.pdf &&
+curl -k -H "X-Homekeepr-Scraper: $SCRAPER_SECRET" 'http://localhost:8000/scrape/rheem/XG40T12HE40U0'  --output f.pdf &&
+curl -k -H "X-Homekeepr-Scraper: $SCRAPER_SECRET" 'http://localhost:8000/scrape/rheem/RTGH-95DVLN-3'  --output g.pdf &&
+curl -k -H "X-Homekeepr-Scraper: $SCRAPER_SECRET" 'http://localhost:8000/scrape/rheem/RTG-95XLN-1'  --output h.pdf 
