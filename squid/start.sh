@@ -10,4 +10,7 @@ export UPSTREAM_1_HOST UPSTREAM_2_HOST UPSTREAM_1_USER_PASS UPSTREAM_2_USER_PASS
 
 envsubst < /etc/squid/squid.conf.template > /etc/squid/squid.conf
 
+# Clean up stale pid file from any unclean shutdown
+rm -f /var/run/squid.pid
+
 squid -f /etc/squid/squid.conf -N
