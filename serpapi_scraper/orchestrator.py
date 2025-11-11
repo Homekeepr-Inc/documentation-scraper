@@ -23,6 +23,7 @@ from utils import (  # type: ignore  # pylint: disable=import-error
     create_temp_download_dir,
     validate_pdf_file,
 )
+from .headless_pdf_fetcher import download_pdf_with_headless, get_host
 from app.config import DOWNLOAD_TIMEOUT, USER_AGENT
 
 PdfResult = Dict[str, Any]
@@ -112,6 +113,10 @@ MANUAL_TOKENS: Tuple[str, ...] = (
 MAX_ANALYZED_PAGES = 6
 MAX_ANALYZED_CHARACTERS = 20000
 ACCEPTABLE_DOC_TYPES = {"owner", "installation", "tech"}
+HEADLESS_FALLBACK_HOSTS = {
+    "whirlpool.com",
+    "www.whirlpool.com",
+}
 
 
 def detect_doc_type(title: str, url: str) -> str:
@@ -136,6 +141,11 @@ def derive_filename(url: str, brand: str, model: str) -> str:
     if not filename.lower().endswith(".pdf"):
         filename += ".pdf"
     return unquote(filename)
+
+
+def should_use_headless(url: str) -> bool:
+    host = get_host(url)
+    return host in HEADLESS_FALLBACK_HOSTS
 
 
 def score_candidate(url: str, title: str, snippet: str, config: BrandConfig, model: str, position: Optional[int]) -> int:
@@ -433,6 +443,9 @@ def download_pdf(url: str, temp_dir: str, *, brand: str, model: str) -> Optional
         )
     except requests.RequestException as exc:
         logger.warning("Download failed for url=%s: %s", url, exc)
+        if should_use_headless(url):
+            logger.info("Attempting headless fallback download for url=%s", url)
+            return download_pdf_with_headless(url, temp_dir)
         return None
 
     if response.status_code != 200:
@@ -441,6 +454,16 @@ def download_pdf(url: str, temp_dir: str, *, brand: str, model: str) -> Optional
             url,
             response.status_code,
         )
+        redirected_url = response.url or url
+        if response.status_code in {401, 403, 404, 407, 408, 429, 500} and should_use_headless(
+            redirected_url
+        ):
+            logger.info(
+                "Attempting headless fallback due to status=%s url=%s",
+                response.status_code,
+                redirected_url,
+            )
+            return download_pdf_with_headless(redirected_url, temp_dir)
         return None
 
     content_type = (response.headers.get("Content-Type") or "").lower()
@@ -450,6 +473,14 @@ def download_pdf(url: str, temp_dir: str, *, brand: str, model: str) -> Optional
             url,
             content_type or "unknown",
         )
+        redirected_url = response.url or url
+        if should_use_headless(redirected_url):
+            logger.info(
+                "Attempting headless fallback due to content-type=%s url=%s",
+                content_type or "unknown",
+                redirected_url,
+            )
+            return download_pdf_with_headless(redirected_url, temp_dir)
         return None
 
     filename = derive_filename(response.url or url, brand, model)

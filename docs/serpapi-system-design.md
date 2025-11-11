@@ -105,6 +105,7 @@
   - Flags `too_short_for_owner` when page_count < 4 so two-page brochures cannot be accepted as owner manuals.
   - Sets `fallback_image_manual` only when text is absent but the document is long enough (≥5 pages) to plausibly be a scan.
 - Rejects candidates that fail heuristics: disallowed doc_type, no manual keywords, marketing-heavy with no owner signal, short owner manuals, or invalid PDFs.
+- Falls back to a minimal headless Chrome downloader for allowlisted hosts (currently Whirlpool) when direct `requests` downloads return 4xx/5xx/timeouts; the helper lives in `serpapi_scraper/headless_pdf_fetcher.py` and simply navigates to the PDF to trigger Chrome's download manager before reusing the same validation pipeline.
 - Provides structured log entries (`serpapi.orchestrator`) for every decision, including `pdf_analysis_reason`, and attaches `pdf_features` to the ingestion metadata for downstream auditing.
 - Cleans up temp directories on every failure to avoid orphan files; only accepted manuals flow into ingestion.
 
@@ -119,6 +120,7 @@
   - **Tier 1**: Fully indexed brands (Whirlpool, Sub-Zero, Frigidaire) – fallback rarely triggered, but legacy scraper remains available.
   - **Tier 2**: Partially indexed (ElectroluxMedia) – SerpApi first, then targeted headless page fetch.
   - **Tier 3**: Not indexed / blocked – SerpApi still attempted to catch edge cases; legacy headless script expected to run immediately after failure.
+- Before invoking brand-specific Selenium flows we attempt a lightweight headless PDF fetch for allowlisted hosts that block raw HTTP downloads (see `download_pdf_with_headless`).
 - Implement guardrail: if SerpApi returns < N PDFs for a brand over rolling window, trigger health alert and auto-switch to headless mode.
 
 ## Configuration & Secrets
