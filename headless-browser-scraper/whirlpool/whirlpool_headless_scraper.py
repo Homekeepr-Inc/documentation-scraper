@@ -12,8 +12,6 @@ Example: python3 whirlpool_headless_scraper.py WRT311FZDW
 
 import sys
 import os
-import time
-import random
 from urllib.parse import urljoin, urlparse
 
 import undetected_chromedriver as uc
@@ -32,13 +30,13 @@ from utils import (
     create_chrome_driver,
     wait_for_download,
     duckduckgo_fallback,
+    ensure_pdf_download,
 )
 
 # Add project root to sys.path
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
 from app.config import DEFAULT_BLOB_ROOT
-
 
 def whirlpool_duckduckgo_callback(driver, model: str, download_dir: str):
     """Find, download, and return the Whirlpool owner's manual PDF via DuckDuckGo fallback."""
@@ -73,86 +71,31 @@ def whirlpool_duckduckgo_callback(driver, model: str, download_dir: str):
         file_url = urljoin(product_url, raw_href)
         print(f"Resolved Owner's Manual URL: {file_url}")
 
-        files_before = set(os.listdir(download_dir))
         filename = os.path.basename(urlparse(file_url).path) or f"{model}.pdf"
-        if not filename.lower().endswith('.pdf'):
-            filename = f"{filename}.pdf"
-
-        # Force the link to download within the current tab instead of opening a viewer.
-        driver.execute_script(
-            "arguments[0].setAttribute('target', '_self'); arguments[0].setAttribute('download', arguments[1]);",
+        pdf_path, download_info = ensure_pdf_download(
+            driver,
             manual_link,
-            filename,
+            download_dir,
+            file_url=file_url,
+            preferred_filename=filename,
         )
-        driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", manual_link)
-        time.sleep(0.2)
-        driver.execute_script("arguments[0].click();", manual_link)
-        print("Clicked Owner's Manual link.")
-
-        pdf_path = wait_for_download(download_dir, timeout=30)
+        errors = download_info.get('errors') or []
+        if errors:
+            print(f"Download helper warnings: {errors}")
         if pdf_path:
             print(f"Downloaded PDF during Whirlpool fallback: {pdf_path}")
         else:
-            files_after = set(os.listdir(download_dir))
-            new_files = files_after - files_before
-            if new_files:
-                newest = max(
-                    (os.path.join(download_dir, fname) for fname in new_files),
-                    key=os.path.getmtime,
-                )
-                print(f"Detected new file after click without wait_for_download match: {newest}")
-                pdf_path = newest if newest.lower().endswith('.pdf') else None
-
-        # As a fallback, trigger an in-page fetch + download to force Chrome to stream the PDF.
-        if not pdf_path:
-            print("Primary click did not yield a local PDF; attempting fetch-based download fallback...")
-            try:
-                fetch_result = driver.execute_async_script(
-                    """
-                    const url = arguments[0];
-                    const filename = arguments[1];
-                    const callback = arguments[2];
-
-                    fetch(url, { credentials: 'include' })
-                        .then(response => {
-                            if (!response.ok) {
-                                throw new Error(`HTTP ${response.status}`);
-                            }
-                            return response.blob();
-                        })
-                        .then(blob => {
-                            const blobUrl = URL.createObjectURL(blob);
-                            const anchor = document.createElement('a');
-                            anchor.href = blobUrl;
-                            anchor.download = filename;
-                            document.body.appendChild(anchor);
-                            anchor.click();
-                            setTimeout(() => {
-                                URL.revokeObjectURL(blobUrl);
-                                anchor.remove();
-                                callback(true);
-                            }, 500);
-                        })
-                        .catch(err => {
-                            console.error('Whirlpool manual fetch fallback failed:', err);
-                            callback(false);
-                        });
-                    """,
-                    file_url,
-                    filename,
-                )
-                print(f"Fetch-based fallback triggered: {fetch_result}")
-            except Exception as async_err:
-                print(f"Fetch-based fallback execution failed: {async_err}")
-
-            pdf_path = wait_for_download(download_dir, timeout=30)
-            if pdf_path:
-                print(f"Downloaded PDF via fetch fallback: {pdf_path}")
+            print("Whirlpool fallback did not detect a local PDF download.")
+            pending = download_info.get('pending') or []
+            if pending:
+                print(f"In-progress downloads detected: {pending}")
+            other_new = download_info.get('other_new_files') or []
+            if other_new:
+                print(f"Other new files observed: {other_new}")
+            if download_info.get('fetch_triggered'):
+                print("Fetch-based fallback executed but no completed PDF was detected.")
 
         current_url = driver.current_url if driver.current_url != 'about:blank' else file_url
-
-        if not pdf_path:
-            print("Whirlpool fallback did not detect a local PDF download.")
 
         return {
             'file_url': file_url,
@@ -193,24 +136,18 @@ def fallback_scrape(driver, model, search_url, download_dir):
             file_url = urljoin(direct_url, file_url)
             print(f"Found manual link: {file_url}")
 
-            files_before = set(os.listdir(download_dir))
-            driver.execute_script("arguments[0].scrollIntoView();", manual_link)
-            time.sleep(0.2)
-            driver.execute_script("arguments[0].click();", manual_link)
+            filename = os.path.basename(urlparse(file_url).path) or f"{model}.pdf"
+            pdf_path, download_info = ensure_pdf_download(
+                driver,
+                manual_link,
+                download_dir,
+                file_url=file_url,
+                preferred_filename=filename,
+            )
 
-            print("Waiting for download to complete...")
-            pdf_path = None
-            for _ in range(5):
-                time.sleep(0.2)
-                files_after = set(os.listdir(download_dir))
-                new_files = files_after - files_before
-                if new_files:
-                    new_filename = new_files.pop()
-                    pdf_path = os.path.join(download_dir, new_filename)
-                    break
-            if not pdf_path:
-                pdf_path = wait_for_download(download_dir, timeout=15)
-
+            errors = download_info.get('errors') or []
+            if errors:
+                print(f"Download helper warnings: {errors}")
             if pdf_path:
                 print(f"Downloaded PDF: {pdf_path}")
                 direct_result = {
@@ -223,10 +160,15 @@ def fallback_scrape(driver, model, search_url, download_dir):
                     'local_path': pdf_path,
                 }
             else:
-                print("No new PDF downloaded after clicking link")
-                crdownload_files = [f for f in os.listdir(download_dir) if f.endswith('.crdownload')]
-                if crdownload_files:
-                    print(f"Found partial download files: {crdownload_files}. Download may be slow or stuck.")
+                print("No completed PDF detected after clicking link")
+                pending = download_info.get('pending') or []
+                if pending:
+                    print(f"In-progress downloads detected: {pending}")
+                other_new = download_info.get('other_new_files') or []
+                if other_new:
+                    print(f"Other new files observed: {other_new}")
+                if download_info.get('fetch_triggered'):
+                    print("Fetch-based fallback executed but no completed PDF was detected.")
 
         except Exception as e:
             print(f"Error finding manual on direct page: {e}")
@@ -314,29 +256,29 @@ def scrape_whirlpool_manual(model):
 
         # Find and click the Owner's Manual link
         try:
-            owners_manual_link = EC.presence_of_element_located((By.XPATH, "//a[contains(@class, 'clp-item-link') and contains(text(), \"Owner's Manual\")]"))
-            
+            owners_manual_link = WebDriverWait(driver, 5).until(
+                EC.presence_of_element_located(
+                    (By.XPATH, "//a[contains(@class, 'clp-item-link') and contains(text(), \"Owner's Manual\")]")
+                )
+            )
+
             file_url = owners_manual_link.get_attribute("href")
             file_url = urljoin(driver.current_url, file_url)
             print(f"Found Owner's Manual link: {file_url}")
 
-            files_before = set(os.listdir(download_dir))
+            filename = os.path.basename(urlparse(file_url).path) or f"{model}.pdf"
+            pdf_path, download_info = ensure_pdf_download(
+                driver,
+                owners_manual_link,
+                download_dir,
+                file_url=file_url,
+                preferred_filename=filename,
+            )
 
-            # Scroll to element and use JavaScript click to avoid interception
-            driver.execute_script("arguments[0].scrollIntoView();", owners_manual_link)
-            time.sleep(0.2)
-            driver.execute_script("arguments[0].click();", owners_manual_link)
-
-            # Wait for download to complete (check for new PDF files)
-            print("Waiting for download to complete...")
-            time.sleep(0.2)
-
-            files_after = set(os.listdir(download_dir))
-            new_files = files_after - files_before
-
-            if new_files:
-                new_filename = new_files.pop()
-                pdf_path = os.path.join(download_dir, new_filename)
+            errors = download_info.get('errors') or []
+            if errors:
+                print(f"Download helper warnings: {errors}")
+            if pdf_path:
                 print(f"Downloaded PDF: {pdf_path}")
 
                 result = {
@@ -350,12 +292,17 @@ def scrape_whirlpool_manual(model):
                 }
 
                 return result
-            else:
-                print("No new PDF downloaded after clicking link")
-                crdownload_files = [f for f in os.listdir(download_dir) if f.endswith('.crdownload')]
-                if crdownload_files:
-                    print(f"Found partial download files: {crdownload_files}. Download may be slow or stuck.")
-                return None
+
+            print("No completed PDF detected after clicking link")
+            pending = download_info.get('pending') or []
+            if pending:
+                print(f"In-progress downloads detected: {pending}")
+            other_new = download_info.get('other_new_files') or []
+            if other_new:
+                print(f"Other new files observed: {other_new}")
+            if download_info.get('fetch_triggered'):
+                print("Fetch-based fallback executed but no completed PDF was detected.")
+            return None
 
         except Exception as e:
             print(f"Error finding or clicking Owner's Manual link: {e}")

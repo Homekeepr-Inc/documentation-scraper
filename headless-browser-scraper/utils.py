@@ -527,29 +527,271 @@ def validate_pdf_content(file_path, model):
         return False
 
 
-def wait_for_download(download_dir, timeout=30):
+def wait_for_download(
+    download_dir,
+    timeout=30,
+    *,
+    initial_files=None,
+    expected_filename=None,
+    expected_extensions=(".pdf",),
+    poll_interval=0.2,
+    return_details=False,
+    logger=None,
+):
     """
-    Wait for a PDF download to complete in the specified directory.
+    Wait for a download to complete in the specified directory.
 
     Args:
-        download_dir (str): Directory to monitor for downloads
-        timeout (int): Maximum time to wait in seconds
+        download_dir (str): Directory to monitor for downloads.
+        timeout (int): Maximum time to wait in seconds.
+        initial_files (Iterable[str], optional): Snapshot of filenames present before the download started.
+        expected_filename (str, optional): Desired filename (or prefix) to filter matches.
+        expected_extensions (Tuple[str], optional): Allowed file extensions. Defaults to ('.pdf',).
+        poll_interval (float, optional): Seconds to sleep between directory polls.
+        return_details (bool, optional): When True, return (path, info_dict); otherwise just the path.
+        logger (Callable[[str], None], optional): Optional callable for debug logging.
 
     Returns:
-        str: Path to the downloaded PDF file, or None if timeout/no PDF found
+        str or (str, dict): Path to the downloaded file, or None if timeout/no match.
+                            When return_details=True, a tuple of (path, details_dict) is returned.
     """
-    import time
     start_time = time.time()
+    known_files = set(initial_files) if initial_files is not None else set(os.listdir(download_dir))
+    seen_pending = set()
+    expected_filename_normalized = None
+    expected_prefix = None
+    if expected_filename:
+        expected_filename_normalized = expected_filename.strip().lower()
+        expected_prefix, expected_ext = os.path.splitext(expected_filename_normalized)
+    if isinstance(expected_extensions, str):
+        expected_extensions = (expected_extensions,)
+    expected_extensions = tuple(ext.lower() for ext in expected_extensions)
+
+    last_pending = []
+    other_new_files = []
+
+    def _log(message):
+        if logger:
+            logger(message)
 
     while time.time() - start_time < timeout:
-        pdf_files = [f for f in os.listdir(download_dir) if f.endswith('.pdf')]
-        if pdf_files:
-            # Return the most recently modified PDF.
-            pdf_files.sort(key=lambda x: os.path.getmtime(os.path.join(download_dir, x)), reverse=True)
-            return os.path.join(download_dir, pdf_files[0])
-        time.sleep(0.2)
+        try:
+            current_entries = os.listdir(download_dir)
+        except FileNotFoundError:
+            time.sleep(poll_interval)
+            continue
 
-    return None
+        current_set = set(current_entries)
+        new_entries = current_set - known_files
+        if new_entries:
+            known_files.update(new_entries)
+
+        candidate_paths = []
+        candidate_names = []
+        pending = []
+
+        for entry in current_entries:
+            entry_path = os.path.join(download_dir, entry)
+            if not os.path.isfile(entry_path):
+                continue
+
+            entry_lower = entry.lower()
+
+            if entry_lower.endswith(".crdownload"):
+                pending.append(entry)
+                if entry not in seen_pending:
+                    _log(f"Download in progress: {entry}")
+                    seen_pending.add(entry)
+                continue
+
+            if expected_extensions and not any(entry_lower.endswith(ext) for ext in expected_extensions):
+                continue
+
+            if expected_filename_normalized:
+                candidate_lower = entry_lower
+                if candidate_lower != expected_filename_normalized:
+                    candidate_base, _candidate_ext = os.path.splitext(candidate_lower)
+                    if not candidate_base.startswith(expected_prefix or ""):
+                        continue
+
+            # Ignore files that existed before and have not been modified recently.
+            if entry in known_files and entry not in new_entries:
+                try:
+                    if os.path.getmtime(entry_path) <= start_time:
+                        continue
+                except OSError:
+                    continue
+
+            candidate_paths.append(entry_path)
+            candidate_names.append(entry)
+
+        if new_entries:
+            other_new = [
+                entry
+                for entry in new_entries
+                if entry not in candidate_names and entry not in pending
+            ]
+            if other_new:
+                other_new_files.extend(other_new)
+
+        last_pending = pending
+
+        if candidate_paths:
+            candidate_paths.sort(key=lambda path: os.path.getmtime(path), reverse=True)
+            result_path = candidate_paths[0]
+            details = {
+                "new_files": candidate_names,
+                "pending": pending,
+                "other_new_files": other_new_files,
+                "elapsed": time.time() - start_time,
+                "timed_out": False,
+            }
+            return (result_path, details) if return_details else result_path
+
+        time.sleep(poll_interval)
+
+    details = {
+        "new_files": [],
+        "pending": last_pending,
+        "other_new_files": other_new_files,
+        "elapsed": time.time() - start_time,
+        "timed_out": True,
+    }
+    return (None, details) if return_details else None
+
+
+def trigger_fetch_download(driver, file_url: str, filename: str):
+    """
+    Initiate a blob-based download via the browser when a direct click does not yield a local file.
+    Returns True if the browser signalled that the fetch completed successfully.
+    """
+    try:
+        return driver.execute_async_script(
+            """
+            const url = arguments[0];
+            const filename = arguments[1];
+            const callback = arguments[2];
+
+            fetch(url, { credentials: 'include' })
+                .then(response => {
+                    if (!response.ok) {
+                        throw new Error(`HTTP ${response.status}`);
+                    }
+                    return response.blob();
+                })
+                .then(blob => {
+                    const blobUrl = URL.createObjectURL(blob);
+                    const anchor = document.createElement('a');
+                    anchor.href = blobUrl;
+                    anchor.download = filename;
+                    document.body.appendChild(anchor);
+                    anchor.click();
+                    setTimeout(() => {
+                        URL.revokeObjectURL(blobUrl);
+                        anchor.remove();
+                        callback(true);
+                    }, 500);
+                })
+                .catch(err => {
+                    console.error('Fetch-based download fallback failed:', err);
+                    callback(false);
+                });
+            """,
+            file_url,
+            filename,
+        )
+    except Exception as err:
+        print(f"Fetch-based fallback execution failed: {err}")
+        return False
+
+
+def ensure_pdf_download(
+    driver,
+    element,
+    download_dir: str,
+    *,
+    file_url: Optional[str] = None,
+    preferred_filename: Optional[str] = None,
+    timeout: int = 30,
+    fetch_timeout: int = 30,
+    fetch_on_failure: bool = True,
+    scroll_into_view: bool = True,
+    poll_interval: float = 0.2,
+):
+    """
+    Attempt to download a PDF by clicking the supplied element and monitoring the download directory.
+
+    Returns a tuple of (pdf_path, info_dict) where pdf_path may be None when no completed PDF is detected.
+    The info dict contains diagnostic metadata useful for debugging failures.
+    """
+    initial_files = set(os.listdir(download_dir))
+
+    filename = (preferred_filename or "").strip()
+    if not filename and file_url:
+        filename = os.path.basename(urlparse(file_url).path or "")
+    if filename:
+        if not filename.lower().endswith(".pdf"):
+            filename = f"{filename}.pdf"
+    else:
+        filename = f"manual-{int(time.time())}.pdf"
+
+    diagnostics = {
+        "filename": filename,
+        "fetch_triggered": False,
+        "errors": [],
+    }
+
+    # Prepare the element for a same-tab download.
+    try:
+        driver.execute_script("arguments[0].setAttribute('target', '_self');", element)
+    except Exception as err:
+        diagnostics["errors"].append(f"set_target:{err}")
+    try:
+        driver.execute_script("arguments[0].setAttribute('download', arguments[1]);", element, filename)
+    except Exception as err:
+        diagnostics["errors"].append(f"set_download:{err}")
+
+    if scroll_into_view:
+        try:
+            driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", element)
+            time.sleep(0.2)
+        except Exception as err:
+            diagnostics["errors"].append(f"scroll:{err}")
+
+    try:
+        driver.execute_script("arguments[0].click();", element)
+    except Exception as err:
+        diagnostics["errors"].append(f"click:{err}")
+
+    pdf_path, details = wait_for_download(
+        download_dir,
+        timeout=timeout,
+        initial_files=initial_files,
+        expected_filename=filename,
+        poll_interval=poll_interval,
+        return_details=True,
+    )
+
+    diagnostics.update(details)
+
+    if pdf_path:
+        return pdf_path, diagnostics
+
+    if not pdf_path and fetch_on_failure and file_url:
+        diagnostics["fetch_triggered"] = bool(
+            trigger_fetch_download(driver, file_url, filename)
+        )
+        pdf_path, details = wait_for_download(
+            download_dir,
+            timeout=fetch_timeout,
+            initial_files=initial_files,
+            expected_filename=filename,
+            poll_interval=poll_interval,
+            return_details=True,
+        )
+        diagnostics.update(details)
+
+    return pdf_path, diagnostics
 
 # validate_content is broken as most manufacturers do not inject the real model name into the pdf.
 # They usually just mention the model series name vs specific model numbers.
