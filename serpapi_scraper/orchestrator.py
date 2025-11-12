@@ -38,6 +38,17 @@ DOC_TYPE_KEYWORDS: Dict[str, Iterable[str]] = {
     "tech": ("tech sheet", "technical", "service manual", "service data"),
     "spec": ("spec", "specification", "dimension", "datasheet"),
     "guide": ("quick start", "quick-start", "cycle guide", "guide"),
+    "parts": (
+        "parts manual",
+        "parts list",
+        "parts catalog",
+        "parts catalogue",
+        "parts diagram",
+        "replacement parts",
+        "service parts",
+        "parts breakdown",
+        "parts",
+    ),
 }
 
 # Additional PDF content heuristics to validate we captured an actual manual.
@@ -82,6 +93,17 @@ PDF_KEYWORDS: Dict[str, Tuple[str, ...]] = {
         "cycle guide",
         "use guide",
     ),
+    "parts": (
+        "parts manual",
+        "parts list",
+        "parts catalog",
+        "parts catalogue",
+        "parts diagram",
+        "exploded view",
+        "replacement parts",
+        "service parts",
+        "parts breakdown",
+    ),
 }
 
 MARKETING_KEYWORDS: Tuple[str, ...] = (
@@ -112,7 +134,32 @@ MANUAL_TOKENS: Tuple[str, ...] = (
 
 MAX_ANALYZED_PAGES = 6
 MAX_ANALYZED_CHARACTERS = 20000
-ACCEPTABLE_DOC_TYPES = {"owner", "installation", "tech"}
+ACCEPTABLE_DOC_TYPES = {"owner"}
+DISALLOWED_DOC_TYPES = {"parts"}
+DISALLOWED_LOCALE_SUBSTRINGS = ("/es-mx/",)
+LANGUAGE_KEYWORDS: Dict[str, Tuple[str, ...]] = {
+    "english": (
+        "warning",
+        "caution",
+        "read and save these instructions",
+        "important safety instructions",
+        "english",
+        "customer care",
+        "service and support",
+    ),
+    "spanish": (
+        "manual de",
+        "instrucciones de",
+        "en español",
+        "advertencia",
+        "precaución",
+        "peligro",
+        "seguridad",
+        "guarde estas instrucciones",
+        "español",
+    ),
+}
+DEFAULT_ACCEPT_LANGUAGE = "en-US,en;q=0.9"
 HEADLESS_FALLBACK_HOSTS = {
     "whirlpool.com",
     "www.whirlpool.com",
@@ -121,10 +168,28 @@ HEADLESS_FALLBACK_HOSTS = {
 
 def detect_doc_type(title: str, url: str) -> str:
     combined = f"{title} {url}".lower()
+    # Treat parts signals as a hard override so they are never mistaken for owner manuals.
+    parts_keywords = DOC_TYPE_KEYWORDS.get("parts", ())
+    if any(keyword in combined for keyword in parts_keywords):
+        return "parts"
+
+    doc_type_scores: Dict[str, int] = {}
     for doc_type, keywords in DOC_TYPE_KEYWORDS.items():
-        if any(keyword in combined for keyword in keywords):
-            return doc_type
-    return "owner"
+        if doc_type == "parts":
+            continue
+        hits = sum(1 for keyword in keywords if keyword in combined)
+        if hits:
+            doc_type_scores[doc_type] = hits
+
+    if not doc_type_scores:
+        return "owner"
+
+    # Prefer acceptable doc types when there is a tie; otherwise choose the highest score.
+    best_doc_type, _ = max(
+        doc_type_scores.items(),
+        key=lambda item: (item[0] in ACCEPTABLE_DOC_TYPES, item[1]),
+    )
+    return best_doc_type
 
 
 def is_probable_pdf(url: str) -> bool:
@@ -148,6 +213,25 @@ def should_use_headless(url: str) -> bool:
     return host in HEADLESS_FALLBACK_HOSTS
 
 
+def is_disallowed_locale_url(url: str) -> bool:
+    lowered = url.lower()
+    return any(segment in lowered for segment in DISALLOWED_LOCALE_SUBSTRINGS)
+
+
+def infer_headless_referer(url: str) -> Optional[str]:
+    try:
+        parsed = urlsplit(url)
+    except Exception:  # pylint: disable=broad-except
+        return None
+    scheme = parsed.scheme or "https"
+    host = parsed.netloc
+    if not host:
+        host = get_host(url)
+    if not host:
+        return None
+    return f"{scheme}://{host}/"
+
+
 def score_candidate(url: str, title: str, snippet: str, config: BrandConfig, model: str, position: Optional[int]) -> int:
     score = 0
     lowered_url = url.lower()
@@ -168,11 +252,22 @@ def score_candidate(url: str, title: str, snippet: str, config: BrandConfig, mod
 
     doc_type = detect_doc_type(title, url)
     if doc_type == "owner":
-        score += 25
-    elif doc_type == "installation":
-        score += 15
-    elif doc_type == "tech":
-        score += 10
+        score += 30
+    elif doc_type in DISALLOWED_DOC_TYPES:
+        score -= 40
+    else:
+        score -= 10
+
+    parts_hits = (
+        lowered_url.count("parts")
+        + lowered_title.count("parts")
+        + lowered_snippet.count("parts")
+    )
+    if parts_hits:
+        score -= min(60, parts_hits * 10)
+
+    if is_disallowed_locale_url(url):
+        score -= 80
 
     if position is not None:
         score += max(0, 12 - position)
@@ -213,6 +308,9 @@ def extract_pdf_features(local_path: str, model: str) -> Optional[Dict[str, Any]
     marketing_hits = sum(1 for keyword in MARKETING_KEYWORDS if keyword in combined_text)
     manual_tokens = sum(1 for token in MANUAL_TOKENS if token in combined_text)
     contains_model = bool(model) and model.lower() in combined_text
+    language_hits: Dict[str, int] = {}
+    for language, keywords in LANGUAGE_KEYWORDS.items():
+        language_hits[language] = sum(1 for keyword in keywords if keyword in combined_text)
 
     return {
         "page_count": page_count,
@@ -221,6 +319,7 @@ def extract_pdf_features(local_path: str, model: str) -> Optional[Dict[str, Any]
         "manual_tokens": manual_tokens,
         "contains_model": contains_model,
         "text_sample_present": bool(collected_text),
+        "language_hits": language_hits,
         "fallback_image_manual": False,
     }
 
@@ -249,16 +348,33 @@ def evaluate_pdf_candidate(
     manual_tokens = features["manual_tokens"]
     marketing_hits = features["marketing_hits"]
     page_count = features["page_count"]
+    language_hits = features.get("language_hits", {})
+    english_hits = language_hits.get("english", 0)
+    spanish_hits = language_hits.get("spanish", 0)
     # Heuristic to avoid counting promo / non owners-manual PDFs incorrectly.
     features["too_short_for_owner"] = page_count < 4
 
-    resolved_doc_type = candidate_doc_type or "owner"
+    candidate_doc_type_normalized = (candidate_doc_type or "").lower() or None
+    resolved_doc_type = candidate_doc_type_normalized or "owner"
     top_doc_type, top_hits = max(
         keyword_hits.items(), key=lambda item: item[1], default=(resolved_doc_type, 0)
     )
-    if top_hits > 0 and top_doc_type in ACCEPTABLE_DOC_TYPES:
-        resolved_doc_type = top_doc_type
-    elif resolved_doc_type not in ACCEPTABLE_DOC_TYPES and keyword_hits.get("owner"):
+    disallowed_hit_total = sum(
+        keyword_hits.get(doc_type, 0) for doc_type in DISALLOWED_DOC_TYPES
+    )
+
+    if top_hits > 0:
+        if top_doc_type in DISALLOWED_DOC_TYPES:
+            resolved_doc_type = top_doc_type
+        elif top_doc_type in ACCEPTABLE_DOC_TYPES:
+            resolved_doc_type = top_doc_type
+
+    if (
+        resolved_doc_type not in ACCEPTABLE_DOC_TYPES
+        and resolved_doc_type not in DISALLOWED_DOC_TYPES
+        and keyword_hits.get("owner")
+        and disallowed_hit_total == 0
+    ):
         resolved_doc_type = "owner"
 
     has_manual_tokens = manual_tokens > 0
@@ -283,6 +399,12 @@ def evaluate_pdf_candidate(
     elif page_count <= 2 and keyword_hits.get("owner", 0) == 0:
         accept = False
         reason = "insufficient_pages"
+    elif english_hits == 0 and spanish_hits > 0:
+        accept = False
+        reason = "non_english_content"
+    elif spanish_hits >= max(3, english_hits * 2):
+        accept = False
+        reason = "non_english_content"
 
     if (
         not accept
@@ -368,6 +490,9 @@ def collect_candidates(
             continue
         if not is_probable_pdf(url):
             continue
+        if is_disallowed_locale_url(url):
+            logger.debug("Skipping candidate due to disallowed locale url=%s", url)
+            continue
         seen_urls.add(url)
         title = result.get("title") or ""
         snippet = result.get("snippet") or ""
@@ -398,6 +523,9 @@ def collect_candidates(
         if not url or url in seen_urls:
             continue
         if not is_probable_pdf(url):
+            continue
+        if is_disallowed_locale_url(url):
+            logger.debug("Skipping inline candidate due to disallowed locale url=%s", url)
             continue
         seen_urls.add(url)
         title = item.get("title") or ""
@@ -431,7 +559,7 @@ def collect_candidates(
 
 
 def download_pdf(url: str, temp_dir: str, *, brand: str, model: str) -> Optional[str]:
-    headers = {"User-Agent": USER_AGENT}
+    headers = {"User-Agent": USER_AGENT, "Accept-Language": DEFAULT_ACCEPT_LANGUAGE}
     logger.info("Downloading candidate url=%s brand=%s model=%s", url, brand, model)
     try:
         response = requests.get(
@@ -445,7 +573,8 @@ def download_pdf(url: str, temp_dir: str, *, brand: str, model: str) -> Optional
         logger.warning("Download failed for url=%s: %s", url, exc)
         if should_use_headless(url):
             logger.info("Attempting headless fallback download for url=%s", url)
-            return download_pdf_with_headless(url, temp_dir)
+            referer = infer_headless_referer(url)
+            return download_pdf_with_headless(url, temp_dir, referer=referer)
         return None
 
     if response.status_code != 200:
@@ -463,7 +592,8 @@ def download_pdf(url: str, temp_dir: str, *, brand: str, model: str) -> Optional
                 response.status_code,
                 redirected_url,
             )
-            return download_pdf_with_headless(redirected_url, temp_dir)
+            referer = infer_headless_referer(url) or infer_headless_referer(redirected_url)
+            return download_pdf_with_headless(redirected_url, temp_dir, referer=referer)
         return None
 
     content_type = (response.headers.get("Content-Type") or "").lower()
@@ -480,7 +610,8 @@ def download_pdf(url: str, temp_dir: str, *, brand: str, model: str) -> Optional
                 content_type or "unknown",
                 redirected_url,
             )
-            return download_pdf_with_headless(redirected_url, temp_dir)
+            referer = infer_headless_referer(url) or infer_headless_referer(redirected_url)
+            return download_pdf_with_headless(redirected_url, temp_dir, referer=referer)
         return None
 
     filename = derive_filename(response.url or url, brand, model)
@@ -507,6 +638,10 @@ def attempt_candidate(candidate: Dict[str, Any], *, brand: str, model: str) -> O
         candidate.get("score"),
         candidate.get("source"),
     )
+    candidate_url = candidate.get("url") or ""
+    if candidate_url and is_disallowed_locale_url(candidate_url):
+        logger.info("Skipping candidate due to disallowed locale url=%s", candidate_url)
+        return None
     temp_dir = create_temp_download_dir()
     try:
         local_path = download_pdf(candidate["url"], temp_dir, brand=brand, model=model)

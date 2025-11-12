@@ -22,6 +22,7 @@ from utils import (  # type: ignore  # pylint: disable=import-error
 )
 
 logger = logging.getLogger("serpapi.headless")
+DEFAULT_ACCEPT_LANGUAGE = "en-US,en;q=0.9"
 
 
 def _set_request_headers(driver, referer: Optional[str]) -> None:
@@ -31,7 +32,7 @@ def _set_request_headers(driver, referer: Optional[str]) -> None:
     """
     try:
         driver.execute_cdp_cmd("Network.enable", {})
-        headers = {"User-Agent": USER_AGENT}
+        headers = {"User-Agent": USER_AGENT, "Accept-Language": DEFAULT_ACCEPT_LANGUAGE}
         if referer:
             headers["Referer"] = referer
         driver.execute_cdp_cmd("Network.setExtraHTTPHeaders", {"headers": headers})
@@ -63,6 +64,11 @@ def download_pdf_with_headless(
             download_dir,
         )
         _set_request_headers(driver, referer)
+        if referer and referer != url:
+            try:
+                safe_driver_get(driver, referer, timeout=min(timeout, 10))
+            except Exception as exc:  # pylint: disable=broad-except
+                logger.debug("Pre-navigation to referer failed referer=%s: %s", referer, exc)
         safe_driver_get(driver, url, timeout=timeout)
 
         pdf_path = wait_for_download(download_dir, timeout=max(timeout, 20))
