@@ -21,7 +21,7 @@ docker compose build app
 
 # Scale up to 8 replicas (4 old + 4 new) for zero downtime
 echo "🔄 Scaling up to 8 app instances"
-docker compose up --scale app=8 -d --no-deps app
+docker compose up --scale app=8 -d
 
 # Wait for all app containers to be healthy
 echo "⏳ Waiting for all app containers to be healthy..."
