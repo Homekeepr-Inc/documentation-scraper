@@ -1,13 +1,26 @@
+"""
+Minimal headless PDF fetcher used by the SerpApi orchestrator.
+
+The older implementation attempted to emulate full site-specific scrapers which
+made maintenance difficult.  This helper focuses purely on establishing cookies
+via a warm-up navigation and then downloading the requested PDF while mimicking
+normal browser behaviour.
+"""
+
+from __future__ import annotations
+
+import contextlib
 import logging
-from typing import Optional
-from urllib.parse import urlsplit
-
-from app.config import DOWNLOAD_TIMEOUT, USER_AGENT
-
-# Ensure headless utils are available on the path (same approach as orchestrator).
 import os
+import random
 import sys
+import time
+from typing import Optional
+from urllib.parse import urlparse, urlunparse
 
+from app.config import DOWNLOAD_TIMEOUT
+
+# Reuse the shared headless utilities so we inherit consistent browser settings.
 HEADLESS_UTILS_PATH = os.path.abspath(
     os.path.join(os.path.dirname(__file__), "..", "headless-browser-scraper")
 )
@@ -18,48 +31,56 @@ from utils import (  # type: ignore  # pylint: disable=import-error
     create_chrome_driver,
     get_chrome_options,
     safe_driver_get,
+    trigger_fetch_download,
     wait_for_download,
 )
 
-logger = logging.getLogger("serpapi.headless")
-DEFAULT_ACCEPT_LANGUAGE = "en-US,en;q=0.9"
-BROWSER_ACCEPT_HEADER = "application/pdf,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8"
-BROWSER_SEC_CH_HEADERS = {
-    "sec-ch-ua": '"Chromium";v="122", "Not(A:Brand";v="24", "Google Chrome";v="122"',
-    "sec-ch-ua-mobile": "?0",
-    "sec-ch-ua-platform": '"macOS"',
-}
+logger = logging.getLogger("serpapi.headless_pdf_fetcher")
+
+# Allow a little extra time compared to synchronous requests so the download can complete.
+DEFAULT_NAVIGATION_TIMEOUT = max(20, DOWNLOAD_TIMEOUT)
+DEFAULT_DOWNLOAD_TIMEOUT = max(30, DOWNLOAD_TIMEOUT + 10)
 
 
-def _set_request_headers(driver, referer: Optional[str]) -> None:
+def get_host(url: str) -> str:
     """
-    Forward consistent headers (UA + optional referer) through CDP so the PDF
-    request mimics a normal browser navigation.
+    Return the normalized host for a URL.
+
+    Falls back to an empty string when parsing fails so callers can short-circuit.
     """
+    if not url:
+        return ""
     try:
-        driver.execute_cdp_cmd("Network.enable", {})
-        headers = {
-            "User-Agent": USER_AGENT,
-            "Accept-Language": DEFAULT_ACCEPT_LANGUAGE,
-            "Accept": BROWSER_ACCEPT_HEADER,
-            "Accept-Encoding": "gzip, deflate, br",
-            "Connection": "keep-alive",
-            "Pragma": "no-cache",
-            "Cache-Control": "no-cache",
-            "Upgrade-Insecure-Requests": "1",
-            "Sec-Fetch-Mode": "navigate",
-            "Sec-Fetch-Dest": "document",
-            "Sec-Fetch-User": "?1",
-        }
-        headers.update(BROWSER_SEC_CH_HEADERS)
-        if referer:
-            headers["Referer"] = referer
-            headers["Sec-Fetch-Site"] = "same-origin"
-        else:
-            headers["Sec-Fetch-Site"] = "none"
-        driver.execute_cdp_cmd("Network.setExtraHTTPHeaders", {"headers": headers})
-    except Exception as exc:  # pylint: disable=broad-except
-        logger.debug("Failed to configure CDP headers for headless download: %s", exc)
+        parsed = urlparse(url)
+    except Exception:  # pylint: disable=broad-except
+        return ""
+
+    host = parsed.netloc or ""
+    return host.lower()
+
+
+def _build_root_url(url: str) -> Optional[str]:
+    """Best-effort attempt to derive a root URL for warm-up navigation."""
+    if not url:
+        return None
+    try:
+        parsed = urlparse(url)
+    except Exception:  # pylint: disable=broad-except
+        return None
+
+    host = parsed.netloc
+    if not host:
+        return None
+
+    scheme = parsed.scheme or "https"
+    root_parts = (scheme, host, "/", "", "", "")
+    return urlunparse(root_parts)
+
+
+def _sleep_jitter(base: float, spread: float = 0.75) -> None:
+    """Pause briefly with jitter to mimic natural browsing cadence."""
+    delay = base + random.uniform(0, spread)  # nosec B311
+    time.sleep(delay)
 
 
 def download_pdf_with_headless(
@@ -67,149 +88,94 @@ def download_pdf_with_headless(
     download_dir: str,
     *,
     referer: Optional[str] = None,
-    timeout: int = DOWNLOAD_TIMEOUT,
+    navigation_timeout: int = DEFAULT_NAVIGATION_TIMEOUT,
+    download_timeout: int = DEFAULT_DOWNLOAD_TIMEOUT,
 ) -> Optional[str]:
     """
-    Fetch a PDF URL using a minimal headless Chrome session.
+    Use a headless Chrome session to download a PDF.
 
-    This is a generic helper that simply navigates to the URL and waits for
-    Chrome's download manager to persist the PDF into `download_dir`. It does
-    not attempt any DOM scraping beyond a simple fetch fallback.
+    The driver first navigates to a warm-up page (either the provided referer or the
+    derived root domain) so that any required cookies/session data are established.
+    It then loads the direct PDF URL and waits for Chrome's download manager to
+    finish writing the file.  As a fallback we execute an in-browser fetch to trigger
+    a manual download in case the navigation was intercepted by the site.
     """
-    options = get_chrome_options(download_dir)
-    driver = create_chrome_driver(options=options, download_dir=download_dir)
-    try:
-        logger.info(
-            "Headless download starting url=%s referer=%s download_dir=%s",
-            url,
-            referer or "none",
-            download_dir,
-        )
-        _set_request_headers(driver, referer)
-        if referer and referer != url:
-            try:
-                safe_driver_get(driver, referer, timeout=min(timeout, 10))
-                try:
-                    logger.debug(
-                        "Headless pre-navigation succeeded referer=%s current_url=%s",
-                        referer,
-                        driver.current_url,
-                    )
-                except Exception as exc:  # pylint: disable=broad-except
-                    logger.debug("Failed to read current_url after referer nav: %s", exc)
-            except Exception as exc:  # pylint: disable=broad-except
-                logger.debug("Pre-navigation to referer failed referer=%s: %s", referer, exc)
-        safe_driver_get(driver, url, timeout=timeout)
-        try:
-            logger.debug(
-                "Headless navigation completed url=%s current_url=%s title=%s",
-                url,
-                driver.current_url,
-                driver.title,
-            )
-        except Exception as exc:  # pylint: disable=broad-except
-            logger.debug("Failed to read page metadata after navigation url=%s: %s", url, exc)
-
-        pdf_path, download_details = wait_for_download(
-            download_dir,
-            timeout=max(timeout, 20),
-            return_details=True,
-            logger=logger.debug,
-        )
-        if pdf_path:
-            logger.info(
-                "Headless download succeeded url=%s path=%s metadata=%s",
-                url,
-                pdf_path,
-                download_details,
-            )
-            return pdf_path
-        logger.debug(
-            "Headless initial wait produced no download url=%s details=%s",
-            url,
-            download_details,
-        )
-
-        # If direct navigation did not trigger a download, try a fetch-based fallback.
-        try:
-            if referer and referer != url:
-                try:
-                    logger.debug("Re-establishing referer context before fetch url=%s referer=%s", url, referer)
-                    safe_driver_get(driver, referer, timeout=min(timeout, 10))
-                except Exception as exc:  # pylint: disable=broad-except
-                    logger.debug("Failed to reload referer before fetch url=%s error=%s", url, exc)
-
-            logger.debug("Attempting headless fetch fallback url=%s", url)
-            driver.execute_async_script(
-                """
-                const targetUrl = arguments[0];
-                const callback = arguments[1];
-
-                fetch(targetUrl, { credentials: 'include' })
-                    .then(response => {
-                        if (!response.ok) {
-                            throw new Error(`HTTP ${response.status}`);
-                        }
-                        return response.blob();
-                    })
-                    .then(blob => {
-                        const blobUrl = URL.createObjectURL(blob);
-                        const anchor = document.createElement('a');
-                        anchor.href = blobUrl;
-                        anchor.download = '';
-                        document.body.appendChild(anchor);
-                        anchor.click();
-                        setTimeout(() => {
-                            URL.revokeObjectURL(blobUrl);
-                            anchor.remove();
-                            callback(true);
-                        }, 250);
-                    })
-                    .catch(err => {
-                        console.error('fetch fallback failed', err);
-                        callback(false);
-                    });
-                """,
-                url,
-            )
-        except Exception as exc:  # pylint: disable=broad-except
-            logger.debug("Headless fetch fallback execution failed url=%s: %s", url, exc)
-
-        pdf_path, download_details = wait_for_download(
-            download_dir,
-            timeout=15,
-            return_details=True,
-            logger=logger.debug,
-        )
-        if pdf_path:
-            logger.info(
-                "Headless fetch fallback succeeded url=%s path=%s metadata=%s",
-                url,
-                pdf_path,
-                download_details,
-            )
-            return pdf_path
-        logger.debug(
-            "Headless fetch fallback wait produced no download url=%s details=%s",
-            url,
-            download_details,
-        )
-
-        logger.warning("Headless download produced no PDF url=%s", url)
+    if not url or not download_dir:
+        logger.debug("Headless fetch skipped because url or download_dir missing")
         return None
-    except Exception as exc:  # pylint: disable=broad-except
-        logger.warning("Headless download failed url=%s: %s", url, exc)
+
+    os.makedirs(download_dir, exist_ok=True)
+
+    host = get_host(url)
+    initial_snapshot = set(os.listdir(download_dir))
+
+    chrome_options = get_chrome_options(download_dir=download_dir)
+    driver = create_chrome_driver(options=chrome_options, download_dir=download_dir)
+
+    try:
+        warmup_url = referer or _build_root_url(url)
+        if warmup_url:
+            try:
+                logger.debug("Headless warm-up navigation url=%s", warmup_url)
+                safe_driver_get(driver, warmup_url, timeout=navigation_timeout)
+                _sleep_jitter(0.6)
+            except Exception as exc:  # pylint: disable=broad-except
+                logger.info("Warm-up navigation failed url=%s error=%s", warmup_url, exc)
+
+        logger.info("Headless PDF navigation url=%s host=%s", url, host or "unknown")
+        try:
+            safe_driver_get(driver, url, timeout=navigation_timeout)
+        except Exception as exc:  # pylint: disable=broad-except
+            logger.info("Primary PDF navigation raised error url=%s error=%s", url, exc)
+
+        pdf_path = wait_for_download(
+            download_dir,
+            timeout=download_timeout,
+            initial_files=initial_snapshot,
+            expected_extensions=(".pdf",),
+        )
+        if pdf_path:
+            logger.info("Headless download succeeded url=%s path=%s", url, pdf_path)
+            return pdf_path
+
+        # Fallback: return to the warm-up page (if available) and trigger a fetch-based download.
+        fallback_context_url = warmup_url or _build_root_url(url)
+        if fallback_context_url:
+            try:
+                safe_driver_get(driver, fallback_context_url, timeout=navigation_timeout)
+                _sleep_jitter(0.4)
+            except Exception as exc:  # pylint: disable=broad-except
+                logger.debug(
+                    "Failed to re-establish context before fetch fallback url=%s error=%s",
+                    fallback_context_url,
+                    exc,
+                )
+
+        filename = os.path.basename(urlparse(url).path or "") or f"manual-{int(time.time())}.pdf"
+        if not filename.lower().endswith(".pdf"):
+            filename = f"{filename}.pdf"
+
+        logger.debug("Attempting fetch-based download fallback filename=%s", filename)
+        try:
+            fetch_triggered = trigger_fetch_download(driver, url, filename)
+        except Exception as exc:  # pylint: disable=broad-except
+            logger.info("Fetch-based fallback raised error url=%s error=%s", url, exc)
+            fetch_triggered = False
+
+        if fetch_triggered:
+            pdf_path = wait_for_download(
+                download_dir,
+                timeout=download_timeout,
+                initial_files=initial_snapshot,
+                expected_filename=filename,
+                expected_extensions=(".pdf",),
+            )
+            if pdf_path:
+                logger.info("Fetch-based download succeeded url=%s path=%s", url, pdf_path)
+                return pdf_path
+
+        logger.warning("Headless PDF fetch failed url=%s host=%s", url, host or "unknown")
         return None
     finally:
-        try:
+        with contextlib.suppress(Exception):
             driver.quit()
-        except Exception:  # pylint: disable=broad-except
-            logger.debug("Failed to quit headless driver cleanly for url=%s", url)
-
-
-def get_host(url: str) -> str:
-    """Helper to extract normalized host from a URL."""
-    try:
-        return urlsplit(url).netloc.lower()
-    except Exception:  # pylint: disable=broad-except
-        return ""
