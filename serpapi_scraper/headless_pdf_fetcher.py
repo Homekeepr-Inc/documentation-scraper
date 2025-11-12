@@ -67,17 +67,50 @@ def download_pdf_with_headless(
         if referer and referer != url:
             try:
                 safe_driver_get(driver, referer, timeout=min(timeout, 10))
+                try:
+                    logger.debug(
+                        "Headless pre-navigation succeeded referer=%s current_url=%s",
+                        referer,
+                        driver.current_url,
+                    )
+                except Exception as exc:  # pylint: disable=broad-except
+                    logger.debug("Failed to read current_url after referer nav: %s", exc)
             except Exception as exc:  # pylint: disable=broad-except
                 logger.debug("Pre-navigation to referer failed referer=%s: %s", referer, exc)
         safe_driver_get(driver, url, timeout=timeout)
+        try:
+            logger.debug(
+                "Headless navigation completed url=%s current_url=%s title=%s",
+                url,
+                driver.current_url,
+                driver.title,
+            )
+        except Exception as exc:  # pylint: disable=broad-except
+            logger.debug("Failed to read page metadata after navigation url=%s: %s", url, exc)
 
-        pdf_path = wait_for_download(download_dir, timeout=max(timeout, 20))
+        pdf_path, download_details = wait_for_download(
+            download_dir,
+            timeout=max(timeout, 20),
+            return_details=True,
+            logger=logger.debug,
+        )
         if pdf_path:
-            logger.info("Headless download succeeded url=%s path=%s", url, pdf_path)
+            logger.info(
+                "Headless download succeeded url=%s path=%s metadata=%s",
+                url,
+                pdf_path,
+                download_details,
+            )
             return pdf_path
+        logger.debug(
+            "Headless initial wait produced no download url=%s details=%s",
+            url,
+            download_details,
+        )
 
         # If direct navigation did not trigger a download, try a fetch-based fallback.
         try:
+            logger.debug("Attempting headless fetch fallback url=%s", url)
             driver.execute_async_script(
                 """
                 const targetUrl = arguments[0];
@@ -113,12 +146,25 @@ def download_pdf_with_headless(
         except Exception as exc:  # pylint: disable=broad-except
             logger.debug("Headless fetch fallback execution failed url=%s: %s", url, exc)
 
-        pdf_path = wait_for_download(download_dir, timeout=15)
+        pdf_path, download_details = wait_for_download(
+            download_dir,
+            timeout=15,
+            return_details=True,
+            logger=logger.debug,
+        )
         if pdf_path:
             logger.info(
-                "Headless fetch fallback succeeded url=%s path=%s", url, pdf_path
+                "Headless fetch fallback succeeded url=%s path=%s metadata=%s",
+                url,
+                pdf_path,
+                download_details,
             )
             return pdf_path
+        logger.debug(
+            "Headless fetch fallback wait produced no download url=%s details=%s",
+            url,
+            download_details,
+        )
 
         logger.warning("Headless download produced no PDF url=%s", url)
         return None
