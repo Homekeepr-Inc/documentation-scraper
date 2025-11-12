@@ -89,11 +89,11 @@ BRAND_CONFIGS: Dict[str, BrandConfig] = {
 
 # Default fallbacks shared across brands.
 DEFAULT_QUERY_TEMPLATES = [
-    "{brand} {model} owner's manual filetype:pdf",
-    "{brand} {model} manual filetype:pdf",
-    "{brand} {model} installation manual filetype:pdf",
-    "{model} owner's manual filetype:pdf",
-    "{model} manual filetype:pdf",
+    # "{brand} {model} owner's manual filetype:pdf",
+    # "{brand} {model} manual filetype:pdf",
+    # "{brand} {model} installation manual filetype:pdf",
+    # "{model} owner's manual filetype:pdf",
+    # "{model} manual filetype:pdf",
 ]
 
 

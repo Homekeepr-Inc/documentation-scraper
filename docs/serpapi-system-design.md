@@ -104,6 +104,7 @@
   - Keyword hit counts per doc type (`owner`, `installation`, `tech`, `guide`), marketing keyword counts, manual token counts, model-number presence, text extraction success, page count.
   - Flags `too_short_for_owner` when page_count < 4 so two-page brochures cannot be accepted as owner manuals.
   - Sets `fallback_image_manual` only when text is absent but the document is long enough (≥5 pages) to plausibly be a scan.
+- When `SERPAPI_USE_GEMINI_VALIDATION` is enabled, upload the first few pages (≤5) of the PDF to Gemini 2.5 Flash and accept only when the model responds “yes” to the owner-manual prompt for the requested brand/model.
 - Rejects candidates that fail heuristics: disallowed doc_type, no manual keywords, marketing-heavy with no owner signal, short owner manuals, or invalid PDFs.
 - Falls back to a minimal headless Chrome downloader for allowlisted hosts (currently Whirlpool) when direct `requests` downloads return 4xx/5xx/timeouts; the helper lives in `serpapi_scraper/headless_pdf_fetcher.py` and simply navigates to the PDF to trigger Chrome's download manager before reusing the same validation pipeline.
 - Provides structured log entries (`serpapi.orchestrator`) for every decision, including `pdf_analysis_reason`, and attaches `pdf_features` to the ingestion metadata for downstream auditing.

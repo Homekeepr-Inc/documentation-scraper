@@ -1,12 +1,15 @@
+import contextlib
 import logging
 import os
 import re
 import sys
+import tempfile
+from functools import lru_cache
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 from urllib.parse import unquote, urlsplit
 
 import requests
-from pypdf import PdfReader
+from pypdf import PdfReader, PdfWriter
 
 from .client import SerpApiClient, SerpApiConfigError, SerpApiError, SerpApiQuotaError
 from .config import BrandConfig, build_queries, get_brand_config
@@ -29,6 +32,13 @@ from app.config import DOWNLOAD_TIMEOUT, USER_AGENT, PROXY_URL
 PdfResult = Dict[str, Any]
 
 logger = logging.getLogger("serpapi.orchestrator")
+
+
+def _env_flag(name: str, default: bool = False) -> bool:
+    raw = (os.getenv(name) or "").strip().lower()
+    if not raw:
+        return default
+    return raw in {"1", "true", "yes", "on"}
 
 
 # Simple keyword mapping to infer document type heuristically.
@@ -163,11 +173,17 @@ DEFAULT_ACCEPT_LANGUAGE = "en-US,en;q=0.9"
 HEADLESS_FALLBACK_HOSTS = {
     "whirlpool.com",
     "www.whirlpool.com",
+    "lowes.com",
+    "www.lowes.com",
+    "pdf.lowes.com",
 }
 
 HOST_PREFLIGHT_URLS: Dict[str, str] = {
     "whirlpool.com": "https://www.whirlpool.com/",
     "www.whirlpool.com": "https://www.whirlpool.com/",
+    "lowes.com": "https://www.lowes.com/",
+    "www.lowes.com": "https://www.lowes.com/",
+    "pdf.lowes.com": "https://www.lowes.com/",
 }
 
 BROWSER_SEC_CH_HEADERS = {
@@ -175,6 +191,111 @@ BROWSER_SEC_CH_HEADERS = {
     "sec-ch-ua-mobile": "?0",
     "sec-ch-ua-platform": '"macOS"',
 }
+
+# Gate the Gemini flow behind env flags so production defaults stay unchanged.
+USE_GEMINI_VALIDATION = _env_flag("SERPAPI_USE_GEMINI_VALIDATION", True)
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
+GEMINI_MODEL_NAME = os.getenv("SERPAPI_GEMINI_MODEL", "models/gemini-2.5-flash")
+GEMINI_PAGE_LIMIT = int(os.getenv("SERPAPI_GEMINI_PAGE_LIMIT", "5") or "5")
+if GEMINI_PAGE_LIMIT <= 0:
+    GEMINI_PAGE_LIMIT = 5
+GEMINI_PROMPT_TEMPLATE = (
+    os.getenv("SERPAPI_GEMINI_PROMPT")
+    or (
+        "You are checking whether a PDF contains the owner's manual for a specific appliance. "
+        "Respond with a single word: 'yes' if the document is the owner's manual for the given brand "
+        "and model, otherwise respond 'no'. Do not add explanations."
+    )
+)
+GEMINI_REQUEST_TIMEOUT = int(os.getenv("SERPAPI_GEMINI_TIMEOUT", "45") or "45")
+GEMINI_LOGGER = logging.getLogger("serpapi.gemini")
+
+
+@lru_cache(maxsize=1)
+def _gemini_enabled() -> bool:
+    """Resolve whether Gemini can be used, logging once if misconfigured."""
+    if not USE_GEMINI_VALIDATION:
+        return False
+    if not GEMINI_API_KEY:
+        GEMINI_LOGGER.error(
+            "SERPAPI_USE_GEMINI_VALIDATION enabled but GEMINI_API_KEY is not set; disabling Gemini validation."
+        )
+        return False
+    try:
+        _get_gemini_model()
+    except Exception as exc:  # pylint: disable=broad-except
+        GEMINI_LOGGER.error("Failed to initialize Gemini client: %s", exc)
+        return False
+    return True
+
+
+@lru_cache(maxsize=1)
+def _get_gemini_client():
+    """Lazily configure the Google client once per process."""
+    if not GEMINI_API_KEY:
+        raise RuntimeError("GEMINI_API_KEY is not configured")
+    import google.generativeai as genai  # type: ignore
+
+    genai.configure(api_key=GEMINI_API_KEY)
+    return genai
+
+
+@lru_cache(maxsize=1)
+def _get_gemini_model():
+    """Reuse the model handle so we avoid per-call discovery latency."""
+    client = _get_gemini_client()
+    return client.GenerativeModel(GEMINI_MODEL_NAME)
+
+
+def _build_pdf_excerpt(local_path: str, page_limit: int) -> Tuple[str, bool]:
+    """Trim large PDFs down to the first N pages since Gemini pricing scales with file size."""
+    reader = PdfReader(local_path)
+    total = len(reader.pages)
+    if total <= page_limit:
+        return local_path, False
+
+    writer = PdfWriter()
+    for page in reader.pages[:page_limit]:
+        writer.add_page(page)
+
+    with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as temp_file:
+        writer.write(temp_file)  # type: ignore[arg-type]
+        excerpt_path = temp_file.name
+    return excerpt_path, True
+
+
+def _run_gemini_validation(pdf_path: str, brand: str, model: str) -> Tuple[Optional[bool], str]:
+    """Upload the excerpt and normalize Gemini's response to a boolean."""
+    client = _get_gemini_client()
+    prompt = f"{GEMINI_PROMPT_TEMPLATE}\nBrand: {brand}\nModel: {model}"
+    uploaded_file = None
+    try:
+        uploaded_file = client.upload_file(path=pdf_path, mime_type="application/pdf")
+        response = _get_gemini_model().generate_content(
+            [prompt, uploaded_file],
+            request_options={"timeout": GEMINI_REQUEST_TIMEOUT},
+        )
+    except Exception as exc:  # pylint: disable=broad-except
+        GEMINI_LOGGER.warning(
+            "Gemini validation failed brand=%s model=%s error=%s", brand, model, exc
+        )
+        return None, ""
+    finally:
+        if uploaded_file is not None:
+            with contextlib.suppress(Exception):
+                client.delete_file(uploaded_file.name)
+
+    text_response = (getattr(response, "text", "") or "").strip()
+    normalized = text_response.lower()
+    if "yes" in normalized.split():
+        return True, text_response
+    if "no" in normalized.split():
+        return False, text_response
+    if "yes" in normalized:
+        return True, text_response
+    if "no" in normalized:
+        return False, text_response
+    return None, text_response
 
 
 def build_browser_headers(referer: Optional[str]) -> Dict[str, str]:
@@ -289,6 +410,18 @@ def should_use_headless(url: str) -> bool:
     return host in HEADLESS_FALLBACK_HOSTS
 
 
+def _is_forbidden_status(status: Optional[int]) -> bool:
+    return status == 403
+
+
+def _exception_suggests_forbidden(exc: Exception) -> bool:
+    response = getattr(exc, "response", None)
+    if response is not None and getattr(response, "status_code", None) == 403:
+        return True
+    # Proxy errors frequently embed the HTTP status in the message text.
+    return "403" in str(exc)
+
+
 def is_disallowed_locale_url(url: str) -> bool:
     lowered = url.lower()
     return any(segment in lowered for segment in DISALLOWED_LOCALE_SUBSTRINGS)
@@ -400,8 +533,87 @@ def extract_pdf_features(local_path: str, model: str) -> Optional[Dict[str, Any]
     }
 
 
+def evaluate_pdf_candidate_with_gemini(
+    local_path: str,
+    brand: str,
+    model: str,
+    candidate_doc_type: Optional[str],
+) -> Dict[str, Any]:
+    """Use Gemini yes/no classification while still recording the usual PDF metadata."""
+    extracted_features = extract_pdf_features(local_path, model)
+    if extracted_features is None:
+        return {
+            "accept": False,
+            "reason": "analysis_failed",
+            "resolved_doc_type": None,
+            "features": None,
+        }
+
+    features = dict(extracted_features)
+    features.setdefault("keyword_hits", {})
+    features.setdefault("marketing_hits", 0)
+    features.setdefault("manual_tokens", 0)
+    features.setdefault("contains_model", False)
+    features.setdefault("text_sample_present", False)
+    features.setdefault("language_hits", {})
+    features.setdefault("fallback_image_manual", False)
+
+    page_count = int(features.get("page_count") or 0)
+    features["too_short_for_owner"] = page_count < 4
+
+    if page_count < 4:
+        return {
+            "accept": False,
+            "reason": "owner_manual_too_short",
+            "resolved_doc_type": None,
+            "features": features,
+        }
+
+    excerpt_path, created_excerpt = _build_pdf_excerpt(local_path, GEMINI_PAGE_LIMIT)
+    try:
+        result, response_text = _run_gemini_validation(excerpt_path, brand, model)
+    finally:
+        if created_excerpt:
+            with contextlib.suppress(OSError):
+                os.unlink(excerpt_path)
+
+    features["gemini_model"] = GEMINI_MODEL_NAME
+    features["gemini_page_limit"] = min(GEMINI_PAGE_LIMIT, page_count)
+    features["gemini_response"] = response_text
+
+    if result is None:
+        return {
+            "accept": False,
+            "reason": "gemini_inconclusive",
+            "resolved_doc_type": None,
+            "features": features,
+        }
+
+    features["gemini_answer"] = "yes" if result else "no"
+
+    if not result:
+        return {
+            "accept": False,
+            "reason": "gemini_rejected",
+            "resolved_doc_type": None,
+            "features": features,
+        }
+
+    resolved_doc_type = (candidate_doc_type or "").lower() or "owner"
+    if resolved_doc_type not in ACCEPTABLE_DOC_TYPES:
+        resolved_doc_type = "owner"
+
+    return {
+        "accept": True,
+        "reason": None,
+        "resolved_doc_type": resolved_doc_type,
+        "features": features,
+    }
+
+
 def evaluate_pdf_candidate(
     local_path: str,
+    brand: str,
     model: str,
     candidate_doc_type: Optional[str],
 ) -> Dict[str, Any]:
@@ -410,6 +622,14 @@ def evaluate_pdf_candidate(
 
     Returns analysis dict with accept flag, resolved doc_type, and supporting metadata.
     """
+    if _gemini_enabled():
+        return evaluate_pdf_candidate_with_gemini(
+            local_path,
+            brand,
+            model,
+            candidate_doc_type,
+        )
+
     features = extract_pdf_features(local_path, model)
     if not features:
         return {
@@ -692,9 +912,15 @@ def download_pdf(url: str, temp_dir: str, *, brand: str, model: str) -> Optional
             return None
         except requests.RequestException as exc:
             logger.warning("Download failed for url=%s: %s", url, exc)
-            if should_use_headless(url):
-                logger.info("Attempting headless fallback download for url=%s", url)
-                return download_pdf_with_headless(url, temp_dir, referer=referer)
+            force_headless = _exception_suggests_forbidden(exc)
+            if should_use_headless(url) or force_headless:
+                logger.info(
+                    "Attempting headless fallback download for url=%s reason=%s",
+                    url,
+                    "forbidden" if force_headless else "allowlisted_host",
+                )
+                headless_referer = referer or infer_headless_referer(url)
+                return download_pdf_with_headless(url, temp_dir, referer=headless_referer)
             return None
 
         if response.status_code != 200:
@@ -704,13 +930,16 @@ def download_pdf(url: str, temp_dir: str, *, brand: str, model: str) -> Optional
                 response.status_code,
             )
             redirected_url = response.url or url
-            if response.status_code in {401, 403, 404, 407, 408, 429, 500} and should_use_headless(
-                redirected_url
+            status_code = response.status_code
+            force_headless = _is_forbidden_status(status_code)
+            if status_code in {401, 403, 404, 407, 408, 429, 500} and (
+                force_headless or should_use_headless(redirected_url)
             ):
                 logger.info(
-                    "Attempting headless fallback due to status=%s url=%s",
-                    response.status_code,
+                    "Attempting headless fallback due to status=%s url=%s forced=%s",
+                    status_code,
                     redirected_url,
+                    force_headless,
                 )
                 referer = infer_headless_referer(url) or infer_headless_referer(redirected_url)
                 return download_pdf_with_headless(redirected_url, temp_dir, referer=referer)
@@ -784,6 +1013,7 @@ def attempt_candidate(candidate: Dict[str, Any], *, brand: str, model: str) -> O
 
         analysis = evaluate_pdf_candidate(
             local_path,
+            brand,
             model,
             candidate.get("doc_type"),
         )
