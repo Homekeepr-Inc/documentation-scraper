@@ -23,6 +23,12 @@ from utils import (  # type: ignore  # pylint: disable=import-error
 
 logger = logging.getLogger("serpapi.headless")
 DEFAULT_ACCEPT_LANGUAGE = "en-US,en;q=0.9"
+BROWSER_ACCEPT_HEADER = "application/pdf,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8"
+BROWSER_SEC_CH_HEADERS = {
+    "sec-ch-ua": '"Chromium";v="122", "Not(A:Brand";v="24", "Google Chrome";v="122"',
+    "sec-ch-ua-mobile": "?0",
+    "sec-ch-ua-platform": '"macOS"',
+}
 
 
 def _set_request_headers(driver, referer: Optional[str]) -> None:
@@ -32,9 +38,25 @@ def _set_request_headers(driver, referer: Optional[str]) -> None:
     """
     try:
         driver.execute_cdp_cmd("Network.enable", {})
-        headers = {"User-Agent": USER_AGENT, "Accept-Language": DEFAULT_ACCEPT_LANGUAGE}
+        headers = {
+            "User-Agent": USER_AGENT,
+            "Accept-Language": DEFAULT_ACCEPT_LANGUAGE,
+            "Accept": BROWSER_ACCEPT_HEADER,
+            "Accept-Encoding": "gzip, deflate, br",
+            "Connection": "keep-alive",
+            "Pragma": "no-cache",
+            "Cache-Control": "no-cache",
+            "Upgrade-Insecure-Requests": "1",
+            "Sec-Fetch-Mode": "navigate",
+            "Sec-Fetch-Dest": "document",
+            "Sec-Fetch-User": "?1",
+        }
+        headers.update(BROWSER_SEC_CH_HEADERS)
         if referer:
             headers["Referer"] = referer
+            headers["Sec-Fetch-Site"] = "same-origin"
+        else:
+            headers["Sec-Fetch-Site"] = "none"
         driver.execute_cdp_cmd("Network.setExtraHTTPHeaders", {"headers": headers})
     except Exception as exc:  # pylint: disable=broad-except
         logger.debug("Failed to configure CDP headers for headless download: %s", exc)
@@ -110,6 +132,13 @@ def download_pdf_with_headless(
 
         # If direct navigation did not trigger a download, try a fetch-based fallback.
         try:
+            if referer and referer != url:
+                try:
+                    logger.debug("Re-establishing referer context before fetch url=%s referer=%s", url, referer)
+                    safe_driver_get(driver, referer, timeout=min(timeout, 10))
+                except Exception as exc:  # pylint: disable=broad-except
+                    logger.debug("Failed to reload referer before fetch url=%s error=%s", url, exc)
+
             logger.debug("Attempting headless fetch fallback url=%s", url)
             driver.execute_async_script(
                 """

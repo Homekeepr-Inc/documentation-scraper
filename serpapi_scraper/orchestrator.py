@@ -658,7 +658,7 @@ def download_pdf(url: str, temp_dir: str, *, brand: str, model: str) -> Optional
 
         request_headers = build_browser_headers(referer)
         host = get_host(url)
-        read_timeout = max(DOWNLOAD_TIMEOUT, 45 if host in HEADLESS_FALLBACK_HOSTS else 25)
+        read_timeout = DOWNLOAD_TIMEOUT
         connect_timeout = min(10, DOWNLOAD_TIMEOUT)
 
         logger.info(
