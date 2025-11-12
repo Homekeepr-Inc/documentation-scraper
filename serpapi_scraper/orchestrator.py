@@ -165,6 +165,82 @@ HEADLESS_FALLBACK_HOSTS = {
     "www.whirlpool.com",
 }
 
+HOST_PREFLIGHT_URLS: Dict[str, str] = {
+    "whirlpool.com": "https://www.whirlpool.com/",
+    "www.whirlpool.com": "https://www.whirlpool.com/",
+}
+
+BROWSER_SEC_CH_HEADERS = {
+    "sec-ch-ua": '"Chromium";v="122", "Not(A:Brand";v="24", "Google Chrome";v="122"',
+    "sec-ch-ua-mobile": "?0",
+    "sec-ch-ua-platform": '"macOS"',
+}
+
+
+def build_browser_headers(referer: Optional[str]) -> Dict[str, str]:
+    headers: Dict[str, str] = {
+        "User-Agent": USER_AGENT,
+        "Accept": "application/pdf,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+        "Accept-Language": DEFAULT_ACCEPT_LANGUAGE,
+        "Accept-Encoding": "gzip, deflate, br",
+        "Connection": "keep-alive",
+        "Pragma": "no-cache",
+        "Cache-Control": "no-cache",
+        "Upgrade-Insecure-Requests": "1",
+        "Sec-Fetch-Mode": "navigate",
+        "Sec-Fetch-Dest": "document",
+        "Sec-Fetch-User": "?1",
+    }
+    headers.update(BROWSER_SEC_CH_HEADERS)
+    if referer:
+        headers["Referer"] = referer
+        headers["Sec-Fetch-Site"] = "same-origin"
+    else:
+        headers["Sec-Fetch-Site"] = "none"
+    return headers
+
+
+def warm_up_session_for_host(
+    session: requests.Session,
+    url: str,
+    *,
+    timeout: Tuple[int, int] = (5, 15),
+) -> Optional[str]:
+    """Perform a light navigation to establish cookies before the PDF request."""
+
+    host = get_host(url)
+    warmup_url = HOST_PREFLIGHT_URLS.get(host)
+    if not warmup_url:
+        return None
+
+    warmup_headers = build_browser_headers(None)
+    warmup_headers.pop("Sec-Fetch-User", None)
+    warmup_headers["Accept"] = "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8"
+
+    try:
+        response = session.get(
+            warmup_url,
+            headers=warmup_headers,
+            allow_redirects=True,
+            timeout=timeout,
+        )
+        logger.debug(
+            "Warm-up request completed host=%s status=%s final_url=%s",
+            host,
+            response.status_code,
+            response.url,
+        )
+        if response.status_code < 400:
+            return response.url or warmup_url
+    except requests.RequestException as exc:  # pylint: disable=broad-except
+        logger.debug(
+            "Warm-up request failed host=%s url=%s error=%s",
+            host,
+            warmup_url,
+            exc,
+        )
+    return None
+
 
 def detect_doc_type(title: str, url: str) -> str:
     combined = f"{title} {url}".lower()
@@ -559,94 +635,128 @@ def collect_candidates(
 
 
 def download_pdf(url: str, temp_dir: str, *, brand: str, model: str) -> Optional[str]:
-    headers = {
-        "User-Agent": USER_AGENT,
-        "Accept-Language": DEFAULT_ACCEPT_LANGUAGE,
-        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
-        "Accept-Encoding": "gzip, deflate, br",
-        "Connection": "keep-alive",
-        "Pragma": "no-cache",
-        "Cache-Control": "no-cache",
-        "Sec-Fetch-Dest": "document",
-        "Sec-Fetch-Mode": "navigate",
-        "Sec-Fetch-Site": "none",
-        "Sec-Fetch-User": "?1",
-        "Upgrade-Insecure-Requests": "1",
-    }
     proxies = None
     if PROXY_URL:
         proxies = {"http": PROXY_URL, "https": PROXY_URL}
         logger.debug("Using configured proxy for direct PDF download proxy=%s", PROXY_URL)
-    logger.info("Downloading candidate url=%s brand=%s model=%s", url, brand, model)
+
+    session = requests.Session()
     try:
-        response = requests.get(
-            url,
-            headers=headers,
-            stream=True,
-            timeout=DOWNLOAD_TIMEOUT,
-            allow_redirects=True,
-            proxies=proxies,
-        )
-    except requests.RequestException as exc:
-        logger.warning("Download failed for url=%s: %s", url, exc)
-        if should_use_headless(url):
-            logger.info("Attempting headless fallback download for url=%s", url)
-            referer = infer_headless_referer(url)
-            return download_pdf_with_headless(url, temp_dir, referer=referer)
-        return None
+        if proxies:
+            session.proxies.update(proxies)
 
-    if response.status_code != 200:
+        referer = infer_headless_referer(url)
+        warmed_referer = warm_up_session_for_host(session, url)
+        if warmed_referer:
+            if warmed_referer != referer:
+                logger.debug(
+                    "Using warmed referer for host url=%s referer=%s",
+                    url,
+                    warmed_referer,
+                )
+            referer = warmed_referer
+
+        request_headers = build_browser_headers(referer)
+        host = get_host(url)
+        read_timeout = max(DOWNLOAD_TIMEOUT, 45 if host in HEADLESS_FALLBACK_HOSTS else 25)
+        connect_timeout = min(10, DOWNLOAD_TIMEOUT)
+
         logger.info(
-            "Non-200 response while downloading url=%s status=%s",
+            "Downloading candidate url=%s brand=%s model=%s referer=%s read_timeout=%s",
             url,
-            response.status_code,
+            brand,
+            model,
+            referer or "none",
+            read_timeout,
         )
-        redirected_url = response.url or url
-        if response.status_code in {401, 403, 404, 407, 408, 429, 500} and should_use_headless(
-            redirected_url
-        ):
-            logger.info(
-                "Attempting headless fallback due to status=%s url=%s",
-                response.status_code,
-                redirected_url,
+
+        try:
+            response = session.get(
+                url,
+                headers=request_headers,
+                stream=True,
+                timeout=(connect_timeout, read_timeout),
+                allow_redirects=True,
             )
-            referer = infer_headless_referer(url) or infer_headless_referer(redirected_url)
-            return download_pdf_with_headless(redirected_url, temp_dir, referer=referer)
-        return None
+        except requests.ReadTimeout as exc:
+            logger.warning(
+                "Download timed out while reading url=%s host=%s read_timeout=%s error=%s",
+                url,
+                host,
+                read_timeout,
+                exc,
+            )
+            if should_use_headless(url):
+                logger.info("Attempting headless fallback download for url=%s", url)
+                return download_pdf_with_headless(url, temp_dir, referer=referer)
+            return None
+        except requests.RequestException as exc:
+            logger.warning("Download failed for url=%s: %s", url, exc)
+            if should_use_headless(url):
+                logger.info("Attempting headless fallback download for url=%s", url)
+                return download_pdf_with_headless(url, temp_dir, referer=referer)
+            return None
 
-    content_type = (response.headers.get("Content-Type") or "").lower()
-    if "pdf" not in content_type and not is_probable_pdf(response.url):
-        logger.info(
-            "Skipping candidate url=%s due to content-type=%s",
+        if response.status_code != 200:
+            logger.info(
+                "Non-200 response while downloading url=%s status=%s",
+                url,
+                response.status_code,
+            )
+            redirected_url = response.url or url
+            if response.status_code in {401, 403, 404, 407, 408, 429, 500} and should_use_headless(
+                redirected_url
+            ):
+                logger.info(
+                    "Attempting headless fallback due to status=%s url=%s",
+                    response.status_code,
+                    redirected_url,
+                )
+                referer = infer_headless_referer(url) or infer_headless_referer(redirected_url)
+                return download_pdf_with_headless(redirected_url, temp_dir, referer=referer)
+            return None
+
+        content_type = (response.headers.get("Content-Type") or "").lower()
+        logger.debug(
+            "PDF response headers url=%s content_type=%s content_length=%s",
             url,
             content_type or "unknown",
+            response.headers.get("Content-Length"),
         )
-        redirected_url = response.url or url
-        if should_use_headless(redirected_url):
+        if "pdf" not in content_type and not is_probable_pdf(response.url):
             logger.info(
-                "Attempting headless fallback due to content-type=%s url=%s",
+                "Skipping candidate url=%s due to content-type=%s",
+                url,
                 content_type or "unknown",
-                redirected_url,
             )
-            referer = infer_headless_referer(url) or infer_headless_referer(redirected_url)
-            return download_pdf_with_headless(redirected_url, temp_dir, referer=referer)
-        return None
+            redirected_url = response.url or url
+            if should_use_headless(redirected_url):
+                logger.info(
+                    "Attempting headless fallback due to content-type=%s url=%s",
+                    content_type or "unknown",
+                    redirected_url,
+                )
+                referer = infer_headless_referer(url) or infer_headless_referer(redirected_url)
+                return download_pdf_with_headless(redirected_url, temp_dir, referer=referer)
+            return None
 
-    filename = derive_filename(response.url or url, brand, model)
-    destination = os.path.join(temp_dir, filename)
+        filename = derive_filename(response.url or url, brand, model)
+        destination = os.path.join(temp_dir, filename)
 
-    try:
-        with open(destination, "wb") as file_handle:
-            for chunk in response.iter_content(chunk_size=8192):
-                if not chunk:
-                    continue
-                file_handle.write(chunk)
-    except OSError as exc:
-        logger.error("Failed to persist PDF for url=%s: %s", url, exc)
-        return None
+        try:
+            with open(destination, "wb") as file_handle:
+                for chunk in response.iter_content(chunk_size=8192):
+                    if not chunk:
+                        continue
+                    file_handle.write(chunk)
+        except OSError as exc:
+            logger.error("Failed to persist PDF for url=%s: %s", url, exc)
+            return None
 
-    logger.info("Successfully downloaded url=%s to %s", url, destination)
-    return destination
+        logger.info("Successfully downloaded url=%s to %s", url, destination)
+        return destination
+    finally:
+        session.close()
 
 
 def attempt_candidate(candidate: Dict[str, Any], *, brand: str, model: str) -> Optional[PdfResult]:
