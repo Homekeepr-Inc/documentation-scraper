@@ -1,3 +1,4 @@
+import base64
 import contextlib
 import logging
 import os
@@ -193,7 +194,7 @@ BROWSER_SEC_CH_HEADERS = {
 }
 
 # Gate the Gemini flow behind env flags so production defaults stay unchanged.
-USE_GEMINI_VALIDATION = _env_flag("SERPAPI_USE_GEMINI_VALIDATION", True)
+USE_GEMINI_VALIDATION = _env_flag("SERPAPI_USE_GEMINI_VALIDATION", False)
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 GEMINI_MODEL_NAME = os.getenv("SERPAPI_GEMINI_MODEL", "models/gemini-2.5-flash")
 GEMINI_PAGE_LIMIT = int(os.getenv("SERPAPI_GEMINI_PAGE_LIMIT", "5") or "5")
@@ -209,6 +210,7 @@ GEMINI_PROMPT_TEMPLATE = (
 )
 GEMINI_REQUEST_TIMEOUT = int(os.getenv("SERPAPI_GEMINI_TIMEOUT", "45") or "45")
 GEMINI_LOGGER = logging.getLogger("serpapi.gemini")
+GEMINI_ENDPOINT = "https://generativelanguage.googleapis.com/v1beta"
 
 
 @lru_cache(maxsize=1)
@@ -221,30 +223,7 @@ def _gemini_enabled() -> bool:
             "SERPAPI_USE_GEMINI_VALIDATION enabled but GEMINI_API_KEY is not set; disabling Gemini validation."
         )
         return False
-    try:
-        _get_gemini_model()
-    except Exception as exc:  # pylint: disable=broad-except
-        GEMINI_LOGGER.error("Failed to initialize Gemini client: %s", exc)
-        return False
     return True
-
-
-@lru_cache(maxsize=1)
-def _get_gemini_client():
-    """Lazily configure the Google client once per process."""
-    if not GEMINI_API_KEY:
-        raise RuntimeError("GEMINI_API_KEY is not configured")
-    import google.generativeai as genai  # type: ignore
-
-    genai.configure(api_key=GEMINI_API_KEY)
-    return genai
-
-
-@lru_cache(maxsize=1)
-def _get_gemini_model():
-    """Reuse the model handle so we avoid per-call discovery latency."""
-    client = _get_gemini_client()
-    return client.GenerativeModel(GEMINI_MODEL_NAME)
 
 
 def _build_pdf_excerpt(local_path: str, page_limit: int) -> Tuple[str, bool]:
@@ -266,26 +245,68 @@ def _build_pdf_excerpt(local_path: str, page_limit: int) -> Tuple[str, bool]:
 
 def _run_gemini_validation(pdf_path: str, brand: str, model: str) -> Tuple[Optional[bool], str]:
     """Upload the excerpt and normalize Gemini's response to a boolean."""
-    client = _get_gemini_client()
     prompt = f"{GEMINI_PROMPT_TEMPLATE}\nBrand: {brand}\nModel: {model}"
-    uploaded_file = None
     try:
-        uploaded_file = client.upload_file(path=pdf_path, mime_type="application/pdf")
-        response = _get_gemini_model().generate_content(
-            [prompt, uploaded_file],
-            request_options={"timeout": GEMINI_REQUEST_TIMEOUT},
+        with open(pdf_path, "rb") as pdf_handle:
+            encoded = base64.b64encode(pdf_handle.read()).decode("utf-8")
+    except OSError as exc:
+        GEMINI_LOGGER.warning(
+            "Failed to read PDF for Gemini validation path=%s error=%s", pdf_path, exc
         )
+        return None, ""
+
+    request_body = {
+        "contents": [
+            {
+                "role": "user",
+                "parts": [
+                    {"text": prompt},
+                    {
+                        "inlineData": {
+                            "mimeType": "application/pdf",
+                            "data": encoded,
+                        }
+                    },
+                ],
+            }
+        ]
+    }
+
+    url = f"{GEMINI_ENDPOINT}/{GEMINI_MODEL_NAME}:generateContent?key={GEMINI_API_KEY}"
+    try:
+        response = requests.post(
+            url,
+            json=request_body,
+            timeout=GEMINI_REQUEST_TIMEOUT,
+        )
+        response.raise_for_status()
     except Exception as exc:  # pylint: disable=broad-except
         GEMINI_LOGGER.warning(
             "Gemini validation failed brand=%s model=%s error=%s", brand, model, exc
         )
         return None, ""
-    finally:
-        if uploaded_file is not None:
-            with contextlib.suppress(Exception):
-                client.delete_file(uploaded_file.name)
 
-    text_response = (getattr(response, "text", "") or "").strip()
+    payload = response.json()
+    candidates = payload.get("candidates") or []
+    if not candidates:
+        GEMINI_LOGGER.warning(
+            "Gemini response missing candidates brand=%s model=%s payload=%s",
+            brand,
+            model,
+            payload,
+        )
+        return None, ""
+
+    text_response = ""
+    first_candidate = candidates[0]
+    parts = (first_candidate.get("content") or {}).get("parts") if isinstance(first_candidate, dict) else None
+    if parts:
+        for part in parts:
+            text = part.get("text")
+            if text:
+                text_response = text.strip()
+                break
+
     normalized = text_response.lower()
     if "yes" in normalized.split():
         return True, text_response
