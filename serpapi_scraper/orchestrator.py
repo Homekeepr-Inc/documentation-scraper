@@ -24,7 +24,7 @@ from utils import (  # type: ignore  # pylint: disable=import-error
     validate_pdf_file,
 )
 from .headless_pdf_fetcher import download_pdf_with_headless, get_host
-from app.config import DOWNLOAD_TIMEOUT, USER_AGENT
+from app.config import DOWNLOAD_TIMEOUT, USER_AGENT, PROXY_URL
 
 PdfResult = Dict[str, Any]
 
@@ -559,7 +559,24 @@ def collect_candidates(
 
 
 def download_pdf(url: str, temp_dir: str, *, brand: str, model: str) -> Optional[str]:
-    headers = {"User-Agent": USER_AGENT, "Accept-Language": DEFAULT_ACCEPT_LANGUAGE}
+    headers = {
+        "User-Agent": USER_AGENT,
+        "Accept-Language": DEFAULT_ACCEPT_LANGUAGE,
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+        "Accept-Encoding": "gzip, deflate, br",
+        "Connection": "keep-alive",
+        "Pragma": "no-cache",
+        "Cache-Control": "no-cache",
+        "Sec-Fetch-Dest": "document",
+        "Sec-Fetch-Mode": "navigate",
+        "Sec-Fetch-Site": "none",
+        "Sec-Fetch-User": "?1",
+        "Upgrade-Insecure-Requests": "1",
+    }
+    proxies = None
+    if PROXY_URL:
+        proxies = {"http": PROXY_URL, "https": PROXY_URL}
+        logger.debug("Using configured proxy for direct PDF download proxy=%s", PROXY_URL)
     logger.info("Downloading candidate url=%s brand=%s model=%s", url, brand, model)
     try:
         response = requests.get(
@@ -568,6 +585,7 @@ def download_pdf(url: str, temp_dir: str, *, brand: str, model: str) -> Optional
             stream=True,
             timeout=DOWNLOAD_TIMEOUT,
             allow_redirects=True,
+            proxies=proxies,
         )
     except requests.RequestException as exc:
         logger.warning("Download failed for url=%s: %s", url, exc)
