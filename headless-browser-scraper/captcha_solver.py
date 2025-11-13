@@ -5,19 +5,22 @@ import re
 import time
 from datetime import datetime
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from typing import Optional, Set, List, Tuple
 
 from PIL import Image
 import imageio
-from selenium.common.exceptions import TimeoutException
+from selenium.common.exceptions import StaleElementReferenceException, TimeoutException
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.support.ui import WebDriverWait
+from selenium.webdriver.support.wait import WebDriverWait as Wait  # Alias if needed
 
 from ai_utils import (
     ask_recaptcha_instructions_to_gemini,
     ask_if_tile_contains_object_gemini,
     ask_text_to_gemini
 )
+
 
 class CaptchaSolver:
     def __init__(self, driver, model='gemini-2.5-pro'):
@@ -80,171 +83,216 @@ class CaptchaSolver:
         self.logger.debug("No CAPTCHA detected on current page")
         return None
 
-    def solve_recaptcha_v2(self, max_retries=3):
+    def solve_recaptcha_v2(self, max_rounds=5):
+        """Solve reCAPTCHA v2 by persistently handling challenges until completion or max rounds reached."""
         screenshot_paths = []
-        for attempt in range(max_retries):
-            try:
-                self.logger.info(
-                    "reCAPTCHA v2 solve attempt %d/%d", attempt + 1, max_retries
-                )
+        total_rounds = 0
+        clicked_tile_indices: Set[int] = set()
+        last_object_name = ""
+        last_click_count = 0
 
-                # Ensure we're in default content at the start of each loop.
-                self.driver.switch_to.default_content()
+        try:
+            self.logger.info("Starting reCAPTCHA v2 solve with max %d rounds", max_rounds)
 
-                checkbox_checked = self._click_recaptcha_checkbox()
-                challenge_attached = self._switch_to_challenge_iframe(timeout=5)
+            # Ensure we're in default content
+            self.driver.switch_to.default_content()
 
-                if not challenge_attached:
-                    if checkbox_checked:
-                        self.logger.info(
-                            "No image challenge presented during attempt %d; assuming success",
-                            attempt + 1,
-                        )
-                        self.driver.switch_to.default_content()
+            # Click checkbox to trigger challenge
+            checkbox_checked = self._click_recaptcha_checkbox()
+            if not checkbox_checked:
+                self.logger.warning("Failed to click checkbox; aborting solve")
+                return False
+
+            # Persistent loop: handle challenges until iframe disappears or max rounds
+            while total_rounds < max_rounds:
+                total_rounds += 1
+                self.logger.info("Challenge round %d/%d", total_rounds, max_rounds)
+
+                # Switch to challenge iframe if present
+                if not self._switch_to_challenge_iframe(timeout=5):
+                    self.logger.info("No challenge iframe found in round %d; checking anchor", total_rounds)
+                    if self._verify_anchor_checked(timeout=4):
+                        self.logger.info("Anchor verified checked; solve successful")
                         self._create_success_gif(screenshot_paths)
                         return True
-
-                    self.logger.warning(
-                        "Attempt %d: checkbox click did not register and no challenge displayed; retrying",
-                        attempt + 1,
-                    )
-                    time.sleep(1.5)
-                    self.logger.info(
-                        "Re-checking for challenge iframe after delay (attempt %d)",
-                        attempt + 1,
-                    )
-                    self.driver.switch_to.default_content()
-                    challenge_attached = self._switch_to_challenge_iframe(timeout=3)
-                    if not challenge_attached:
-                        time.sleep(1.5)
-                        continue
-
-                # Handle image challenge
-                target_element = WebDriverWait(self.driver, 10).until(
-                    EC.presence_of_element_located((By.ID, "rc-imageselect-target"))
-                )
-                challenge_path = os.path.join(
-                    self.screenshot_dir, f"challenge_target_{attempt+1}.png"
-                )
-                target_element.screenshot(challenge_path)
-                screenshot_paths.append(challenge_path)
-                challenge_llm_path = self._prepare_image_for_llm(
-                    challenge_path,
-                    suffix="challenge",
-                )
-
-                instruction_element = WebDriverWait(self.driver, 10).until(
-                    EC.presence_of_element_located(
-                        (By.CLASS_NAME, "rc-imageselect-instructions")
-                    )
-                )
-                instruction_text = instruction_element.text.strip()
-                self.logger.debug(
-                    "Attempt %d instruction text: %s", attempt + 1, instruction_text
-                )
-
-                object_name = self._parse_instruction_text(instruction_text)
-                if object_name:
-                    self.logger.info(
-                        "Attempt %d target object (parsed DOM): %s",
-                        attempt + 1,
-                        object_name,
-                    )
-                else:
-                    instruction_path = os.path.join(
-                        self.screenshot_dir, f"instruction_{attempt+1}.png"
-                    )
-                    instruction_element.screenshot(instruction_path)
-                    screenshot_paths.append(instruction_path)
-                    try:
-                        object_name = ask_recaptcha_instructions_to_gemini(
-                            instruction_path, self.model
-                        )
-                        self.logger.info(
-                            "Attempt %d target object (Gemini): %s",
-                            attempt + 1,
-                            object_name,
-                        )
-                    except Exception as exc:  # pylint: disable=broad-except
-                        self.logger.warning(
-                            "Attempt %d failed extracting instructions via Gemini: %s",
-                            attempt + 1,
-                            exc,
-                        )
-                        raise
-
-                if object_name == "skip":
-                    self.logger.info(
-                        "Attempt %d instruction requested skip; clicking skip button",
-                        attempt + 1,
-                    )
-                    self._click_skip_button()
-                    self.driver.switch_to.default_content()
+                    else:
+                        self.logger.warning("No challenge but anchor not checked; continuing")
                     time.sleep(1.5)
                     continue
 
-                table = self.driver.find_element(By.XPATH, "//table[contains(@class, 'rc-imageselect-table')]")
-                tiles = table.find_elements(By.TAG_NAME, "td")
+                # Capture challenge state
+                try:
+                    target_element = WebDriverWait(self.driver, 10).until(
+                        EC.presence_of_element_located((By.ID, "rc-imageselect-target"))
+                    )
+                    challenge_path = os.path.join(
+                        self.screenshot_dir, f"challenge_target_round_{total_rounds}.png"
+                    )
+                    target_element.screenshot(challenge_path)
+                    screenshot_paths.append(challenge_path)
+                    challenge_llm_path = self._prepare_image_for_llm(
+                        challenge_path,
+                        suffix=f"challenge_round_{total_rounds}",
+                    )
+                except TimeoutException:
+                    self.logger.debug("Challenge target not found in round %d; skipping", total_rounds)
+                    self.driver.switch_to.default_content()
+                    continue
 
-                tile_paths = []
+                # Get instructions
+                try:
+                    instruction_element = WebDriverWait(self.driver, 10).until(
+                        EC.presence_of_element_located((By.CLASS_NAME, "rc-imageselect-instructions"))
+                    )
+                    instruction_text = instruction_element.text.strip()
+                    self.logger.debug("Round %d instruction text: %s", total_rounds, instruction_text)
+
+                    object_name = self._parse_instruction_text(instruction_text)
+                    if not object_name:
+                        instruction_path = os.path.join(
+                            self.screenshot_dir, f"instruction_round_{total_rounds}.png"
+                        )
+                        instruction_element.screenshot(instruction_path)
+                        screenshot_paths.append(instruction_path)
+                        object_name = ask_recaptcha_instructions_to_gemini(instruction_path, self.model)
+                        self.logger.info("Round %d target object (Gemini): %s", total_rounds, object_name)
+                    else:
+                        self.logger.info("Round %d target object (DOM): %s", total_rounds, object_name)
+                except TimeoutException:
+                    self.logger.warning("Instructions not found in round %d; skipping", total_rounds)
+                    self.driver.switch_to.default_content()
+                    continue
+
+                if object_name == "skip":
+                    self.logger.info("Round %d: skipping; reloading", total_rounds)
+                    self._click_skip_button()
+                    self.driver.switch_to.default_content()
+                    time.sleep(1.5)
+                    clicked_tile_indices.clear()
+                    last_object_name = ""
+                    last_click_count = 0
+                    continue
+
+                # Detect new task (object change or many prior clicks)
+                is_new_object = object_name.lower() != last_object_name.lower()
+                if is_new_object or last_click_count >= 3:
+                    clicked_tile_indices.clear()
+                    if is_new_object:
+                        self.logger.debug("Round %d: new object '%s'; resetting clicked tiles", total_rounds, object_name)
+                    else:
+                        self.logger.debug("Round %d: same object but >=3 clicks last round; resetting", total_rounds)
+                last_object_name = object_name
+
+                # Collect tiles (handles 3x3, 4x4, single image, etc.)
+                try:
+                    table = WebDriverWait(self.driver, 10).until(
+                        EC.presence_of_element_located(
+                            (By.XPATH, "//table[contains(@class, 'rc-imageselect-table')]")
+                        )
+                    )
+                    tiles = table.find_elements(By.TAG_NAME, "td")
+                    if not tiles:
+                        self.logger.warning("No tiles found in round %d; skipping", total_rounds)
+                        self.driver.switch_to.default_content()
+                        continue
+                except TimeoutException:
+                    self.logger.warning("Tile table not found in round %d; skipping", total_rounds)
+                    self.driver.switch_to.default_content()
+                    continue
+
                 tile_llm_paths = []
                 for i, tile in enumerate(tiles):
-                    tile_path = os.path.join(self.screenshot_dir, f"tile_{attempt+1}_{i}.png")
+                    tile_path = os.path.join(self.screenshot_dir, f"tile_round_{total_rounds}_{i}.png")
                     tile.screenshot(tile_path)
-                    tile_paths.append(tile_path)
                     screenshot_paths.append(tile_path)
-                    tile_llm_paths.append(
-                        self._prepare_image_for_llm(tile_path, suffix=f"tile_{i}")
-                    )
+                    tile_llm_paths.append(self._prepare_image_for_llm(tile_path, suffix=f"tile_round_{total_rounds}_{i}"))
 
-                # Use AI to identify tiles
-                max_workers = min(6, max(1, len(tile_paths)))
+                # Classify tiles in parallel
+                selected_indices: Set[int] = set()
+                max_workers = min(6, max(1, len(tiles)))
                 with ThreadPoolExecutor(max_workers=max_workers) as executor:
                     futures = {
                         executor.submit(
                             self._classify_tile,
-                            attempt + 1,
+                            total_rounds,
                             i,
                             tile_llm_paths[i],
                             object_name,
                             challenge_llm_path,
                         ): i
-                        for i in range(len(tile_paths))
+                        for i in range(len(tiles))
                     }
                     for future in as_completed(futures):
                         idx, response = future.result()
-                        if response == 'true' and tiles[idx].is_displayed():
+                        if response == "true":
+                            selected_indices.add(idx)
+
+                new_tiles = sorted(idx for idx in selected_indices if idx not in clicked_tile_indices)
+                self.logger.info(
+                    "Round %d: AI selected %s (new: %s)",
+                    total_rounds,
+                    sorted(selected_indices),
+                    new_tiles,
+                )
+                last_click_count = len(new_tiles)
+
+                # Click new tiles
+                for idx in new_tiles:
+                    try:
+                        if tiles[idx].is_displayed() and tiles[idx].is_enabled():
                             tiles[idx].click()
                             time.sleep(random.uniform(0.2, 0.5))
+                    except (StaleElementReferenceException, Exception) as exc:
+                        self.logger.debug("Failed to click tile %d in round %d: %s", idx, total_rounds, exc)
 
-                # Verify and submit
+                clicked_tile_indices.update(new_tiles)
+
+                # Attempt to verify
+                challenge_completed = False
                 try:
-                    verify_button = WebDriverWait(self.driver, 5).until(EC.element_to_be_clickable((By.ID, "recaptcha-verify-button")))
+                    verify_button = WebDriverWait(self.driver, 5).until(
+                        EC.element_to_be_clickable((By.ID, "recaptcha-verify-button"))
+                    )
                     verify_button.click()
-                    time.sleep(1.5)
+                    time.sleep(random.uniform(1.0, 1.5))
 
-                    if verify_button.get_attribute("disabled"):
-                        self.logger.info("Challenge passed on attempt %d", attempt + 1)
-                        self.driver.switch_to.default_content()
+                    # Check if button disabled or challenge closed
+                    try:
+                        if verify_button.get_attribute("disabled"):
+                            self.logger.info("Verify button disabled in round %d; likely completed", total_rounds)
+                            challenge_completed = True
+                    except Exception:
+                        self.logger.debug("Verify button state check failed; assuming completion")
+                        challenge_completed = True
+                except TimeoutException:
+                    self.logger.debug("No verify button in round %d; challenge may auto-complete", total_rounds)
+                    challenge_completed = True
+                except Exception as exc:
+                    self.logger.debug("Verify click failed in round %d: %s", total_rounds, exc)
+
+                # Switch out and check if challenge persists
+                self.driver.switch_to.default_content()
+                time.sleep(2)  # Allow DOM update
+
+                # If challenge gone, verify anchor
+                if challenge_completed or not self._switch_to_challenge_iframe(timeout=2):
+                    if self._verify_anchor_checked(timeout=4):
+                        self.logger.info("Anchor checked after round %d; solve successful", total_rounds)
                         self._create_success_gif(screenshot_paths)
                         return True
-                except Exception as exc:  # pylint: disable=broad-except
-                    self.logger.debug(
-                        "Attempt %d verify phase encountered exception: %s",
-                        attempt + 1,
-                        exc,
-                    )
+                    else:
+                        self.logger.debug("Anchor not checked yet; continuing if rounds remain")
 
-                self.driver.switch_to.default_content()
-                time.sleep(2)
+            self.logger.warning("Max %d rounds reached without solving", max_rounds)
+            self._create_success_gif(screenshot_paths, success=False)
+            return False
 
-            except Exception as e:
-                self.logger.warning("Attempt %d failed with exception: %s", attempt + 1, e)
-                continue
-
-        self.logger.error("All %d attempts to solve reCAPTCHA failed", max_retries)
-        self._create_success_gif(screenshot_paths, success=False)
-        return False
+        except Exception as e:
+            self.logger.error("Unexpected error during reCAPTCHA solve: %s", e)
+            self._create_success_gif(screenshot_paths, success=False)
+            return False
+        finally:
+            self.driver.switch_to.default_content()
 
     def _click_recaptcha_checkbox(self):
         """Click the reCAPTCHA checkbox via JS to avoid overlay interception."""
@@ -264,14 +312,37 @@ class CaptchaSolver:
             if state == "true":
                 self.logger.info("reCAPTCHA checkbox already checked")
                 return True
-            self.driver.execute_script("arguments[0].click();", checkbox)
-            time.sleep(random.uniform(0.6, 1.2))
-            state_after = checkbox.get_attribute("aria-checked")
-            if state_after == "true":
-                self.logger.info("Clicked reCAPTCHA checkbox via JS")
+            state_after = state
+            for attempt in range(2):
+                try:
+                    self.driver.execute_script("arguments[0].click();", checkbox)
+                except StaleElementReferenceException:
+                    checkbox = WebDriverWait(self.driver, 5).until(
+                        EC.presence_of_element_located((By.ID, "recaptcha-anchor"))
+                    )
+                    self.driver.execute_script("arguments[0].click();", checkbox)
+                time.sleep(random.uniform(0.6, 1.2))
+                try:
+                    state_after = checkbox.get_attribute("aria-checked")
+                except StaleElementReferenceException:
+                    checkbox = WebDriverWait(self.driver, 5).until(
+                        EC.presence_of_element_located((By.ID, "recaptcha-anchor"))
+                    )
+                    state_after = checkbox.get_attribute("aria-checked")
+                if state_after == "true":
+                    self.logger.info("Clicked reCAPTCHA checkbox via JS")
+                    return True
+                self.logger.debug(
+                    "Checkbox click attempt %d left anchor state %s",
+                    attempt + 1,
+                    state_after,
+                )
+            self.driver.switch_to.default_content()
+            if self._challenge_iframe_present(timeout=5):
+                self.logger.info("Challenge iframe detected after checkbox click")
                 return True
             self.logger.debug(
-                "Checkbox state after click attempt remained %s", state_after
+                "Checkbox state after click attempts remained %s", state_after
             )
             return False
         except TimeoutException:
@@ -283,7 +354,7 @@ class CaptchaSolver:
         finally:
             self.driver.switch_to.default_content()
 
-    def _classify_tile(self, attempt_number, tile_index, image_path, object_name, context_path=None):
+    def _classify_tile(self, round_number, tile_index, image_path, object_name, context_path=None):
         try:
             response = ask_if_tile_contains_object_gemini(
                 image_path,
@@ -292,16 +363,16 @@ class CaptchaSolver:
                 context_image_path=context_path,
             )
             self.logger.info(
-                "Attempt %d tile %d Gemini classification: %s",
-                attempt_number,
+                "Round %d tile %d Gemini classification: %s",
+                round_number,
                 tile_index,
                 response,
             )
             return tile_index, response
         except Exception as exc:  # pylint: disable=broad-except
             self.logger.warning(
-                "Attempt %d tile %d classification failed: %s",
-                attempt_number,
+                "Round %d tile %d classification failed: %s",
+                round_number,
                 tile_index,
                 exc,
             )
@@ -332,15 +403,49 @@ class CaptchaSolver:
                 EC.presence_of_element_located(
                     (
                         By.XPATH,
-                        "//iframe[contains(@src, 'recaptcha') and contains(@title, 'challenge')]",
+                        "//iframe[contains(@title, 'recaptcha challenge expires in two minutes')]",
                     )
                 )
             )
             self.driver.switch_to.frame(challenge_iframe)
-            self.logger.info("Challenge iframe detected")
+            self.logger.info("Switched to challenge iframe")
+            return True
+        except TimeoutException:
+            self.logger.debug("Challenge iframe not found within %d seconds", timeout)
+            return False
+
+    def _challenge_iframe_present(self, timeout=3) -> bool:
+        """Detect if the challenge iframe exists without switching into it."""
+        try:
+            WebDriverWait(self.driver, timeout).until(
+                EC.presence_of_element_located(
+                    (By.XPATH, "//iframe[contains(@title, 'recaptcha challenge')]")
+                )
+            )
             return True
         except TimeoutException:
             return False
+
+    def _verify_anchor_checked(self, timeout=3) -> bool:
+        try:
+            WebDriverWait(self.driver, timeout).until(
+                EC.frame_to_be_available_and_switch_to_it(
+                    (
+                        By.XPATH,
+                        "//iframe[contains(@title, 'reCAPTCHA') and not(contains(@title, 'challenge'))]",
+                    )
+                )
+            )
+            anchor = WebDriverWait(self.driver, timeout).until(
+                EC.presence_of_element_located((By.ID, "recaptcha-anchor"))
+            )
+            state = anchor.get_attribute("aria-checked") == "true"
+            self.logger.debug("Anchor verification state => %s", state)
+            return state
+        except TimeoutException:
+            return False
+        finally:
+            self.driver.switch_to.default_content()
 
     def _parse_instruction_text(self, instruction_text):
         if not instruction_text:
