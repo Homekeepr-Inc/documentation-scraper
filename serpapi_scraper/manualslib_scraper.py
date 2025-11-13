@@ -36,6 +36,9 @@ from utils import (  # type: ignore  # pylint: disable=import-error
     wait_for_download,
 )
 
+from captcha_solver import CaptchaSolver  # type: ignore
+import time
+
 logger = logging.getLogger("serpapi.manualslib")
 
 PRODUCT_PATH_PREFIX = "/products/"
@@ -106,6 +109,58 @@ def _resolve_download_link(driver, timeout: int) -> Optional[str]:
     return href or None
 
 
+def _handle_captcha(
+    driver,
+    *,
+    click_get_manual: bool = True,
+    context: str = "manualslib",
+) -> bool:
+    """
+    Detect and solve any reCAPTCHA challenge surfaced on the current page.
+
+    Returns True when no CAPTCHA is present or after a successful solve.
+    """
+
+    solver = CaptchaSolver(driver)
+    logger.debug("(%s) Checking for CAPTCHA challenge", context)
+    try:
+        captcha_type = solver.detect_type()
+    except Exception as exc:  # pylint: disable=broad-except
+        logger.exception("(%s) CAPTCHA detection raised an exception: %s", context, exc)
+        return False
+
+    if captcha_type != "recaptcha_v2":
+        logger.debug("(%s) No CAPTCHA detected", context)
+        return True
+
+    logger.info("(%s) Detected reCAPTCHA v2 challenge", context)
+    try:
+        if not solver.solve_recaptcha_v2():
+            logger.warning("(%s) Failed to solve reCAPTCHA challenge", context)
+            return False
+        logger.info("(%s) Successfully solved reCAPTCHA challenge", context)
+    except Exception as exc:  # pylint: disable=broad-except
+        logger.exception("(%s) Unexpected error while solving reCAPTCHA: %s", context, exc)
+        return False
+
+    if not click_get_manual:
+        return True
+
+    try:
+        get_manual_button = WebDriverWait(driver, 10).until(
+            EC.element_to_be_clickable((By.ID, "get-manual-button"))
+        )
+        get_manual_button.click()
+        logger.info("(%s) Clicked 'Get manual' button after CAPTCHA solve", context)
+        time.sleep(2)
+    except TimeoutException:
+        logger.warning("(%s) Could not find or click 'Get manual' button after CAPTCHA", context)
+        return False
+
+    logger.debug("(%s) CAPTCHA handling complete", context)
+    return True
+
+
 def download_manual_from_product_page(
     product_url: str,
     *,
@@ -144,13 +199,26 @@ def download_manual_from_product_page(
         logger.info("Navigating ManualsLib manual page url=%s", manual_url)
         safe_driver_get(driver, manual_url, timeout=navigation_timeout)
 
-        download_href = _resolve_download_link(driver, navigation_timeout)
-        if not download_href:
-            return None
+        wait = WebDriverWait(driver, navigation_timeout)
+        try:
+            download_button = wait.until(
+                EC.element_to_be_clickable((By.CSS_SELECTOR, DOWNLOAD_BUTTON_SELECTOR))
+            )
+            download_href = download_button.get_attribute("href") or ""
+            download_url = urljoin(manual_url, download_href)
+            if not _handle_captcha(driver, click_get_manual=False, context="pre-download click"):
+                logger.warning("Aborting ManualsLib scrape due to CAPTCHA failure before download click")
+                return None
+            logger.info("Clicking ManualsLib download button for url=%s", download_url)
+            download_button.click()
+            time.sleep(3)  # Wait for CAPTCHA page to load
 
-        download_url = urljoin(manual_url, download_href)
-        logger.info("Fetching ManualsLib download url=%s", download_url)
-        safe_driver_get(driver, download_url, timeout=navigation_timeout)
+            if not _handle_captcha(driver, context="post-download click"):
+                logger.warning("Aborting ManualsLib scrape due to CAPTCHA failure after download click")
+                return None
+        except TimeoutException:
+            logger.info("Download button not found within timeout on ManualsLib manual page")
+            return None
 
         pdf_path = wait_for_download(
             download_dir,
@@ -160,7 +228,7 @@ def download_manual_from_product_page(
             logger=lambda message: logger.debug("ManualsLib download: %s", message),
         )
         if not pdf_path:
-            logger.info("ManualsLib download did not complete within timeout for url=%s", download_url)
+            logger.info("ManualsLib download did not complete within timeout")
             return None
 
         return ManualslibDownload(
