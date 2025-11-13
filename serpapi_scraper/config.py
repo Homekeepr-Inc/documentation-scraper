@@ -153,10 +153,11 @@ def build_queries(config: BrandConfig, model: str) -> List[str]:
     #     queries.append(template.format(model=normalized_model, brand=config.display_name))
 
     brand_model = " ".join(part for part in [config.display_name, normalized_model] if part)
+    manual_phrase = "owner's manual"
     if brand_model:
-        queries.append(f'{brand_model} "owner\'s manual" site:manualslib.com')
+        queries.append(f"{brand_model} {manual_phrase} site:manualslib.com")
     else:
-        queries.append('"owner\'s manual" site:manualslib.com')
+        queries.append(f"{manual_phrase} site:manualslib.com")
 
     # Deduplicate while preserving order.
     deduped: List[str] = []
