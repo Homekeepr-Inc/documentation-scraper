@@ -1,1 +1,1 @@
-HEADLESS=false USE_TESTING_CHROMEDRIVER=true SCRAPER_SECRET=test_secret python -m uvicorn app.main:app --reload
+HEADLESS=false USE_TESTING_CHROMEDRIVER=true SERPAPI_KEY=f1e714557557c2bd506ca2517c505e6f7c97f2204abe7995ec74ca04d7700392 SCRAPER_SECRET=test_secret PYTHONPATH=. && python3 -m uvicorn app.main:app --reload

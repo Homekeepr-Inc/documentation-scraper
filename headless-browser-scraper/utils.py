@@ -9,6 +9,8 @@ headless browser scrapers, such as fallback mechanisms.
 import time
 import random
 import os
+import re
+import subprocess
 from urllib.parse import urljoin, urlparse
 from typing import Iterable, List, Optional
 
@@ -27,49 +29,92 @@ import shutil
 # Import config for BLOB_ROOT and PROXY_URL
 from app.config import DEFAULT_BLOB_ROOT, PROXY_URL
 
+def _detect_chrome_binary() -> Optional[str]:
+    """
+    Attempt to locate a Chrome executable that Selenium can launch.
 
-def generate_model_candidates(model: str, max_trim: int = 3, min_length: int = 5) -> List[str]:
-    """Create a list of progressively truncated model numbers for fuzzy matching."""
+    Preference order:
+        1. CHROME_BINARY_PATH environment variable
+        2. Standard macOS Google Chrome installation
+        3. Google Chrome for Testing bundle
+        4. Other Chromium-based installs available on PATH
+    """
+    env_override = os.getenv("CHROME_BINARY_PATH")
+    if env_override:
+        candidate = os.path.expanduser(env_override)
+        if os.path.exists(candidate):
+            return candidate
 
-    if not model:
-        return []
+    candidate_paths = [
+        "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+        "/Applications/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing",
+        "/Applications/Google Chrome Canary.app/Contents/MacOS/Google Chrome Canary",
+        "/usr/bin/google-chrome",
+        "/usr/bin/chromium-browser",
+        "/usr/bin/chromium",
+    ]
 
-    normalized = model.strip()
-    if not normalized:
-        return []
+    for candidate in candidate_paths:
+        if os.path.exists(candidate):
+            return candidate
 
-    candidates: List[str] = []
-    for trim in range(0, max_trim + 1):
-        candidate = normalized if trim == 0 else normalized[:-trim]
-        if not candidate or len(candidate) < min_length:
-            continue
-        if candidate not in candidates:
-            candidates.append(candidate)
-    return candidates
+    for candidate in ("google-chrome", "chrome", "chromium-browser", "chromium"):
+        resolved = shutil.which(candidate)
+        if resolved:
+            return resolved
+
+    return None
 
 
-def match_model_in_text(text: str, model: str, max_trim: int = 3) -> Optional[str]:
-    """Return the first candidate model variant discovered in the provided text."""
+def _detect_chrome_major_version(binary_path: Optional[str]) -> Optional[int]:
+    """Return the major version for the supplied Chrome binary."""
 
-    if not text:
+    if not binary_path or not os.path.exists(binary_path):
         return None
 
-    lowered = text.lower()
-    for candidate in generate_model_candidates(model, max_trim=max_trim):
-        if candidate.lower() in lowered:
-            return candidate
-    return None
+    try:
+        output = subprocess.check_output([binary_path, "--version"], text=True).strip()
+    except Exception:
+        return None
+
+    match = re.search(r"(\d+)\.", output)
+    if not match:
+        return None
+    try:
+        return int(match.group(1))
+    except ValueError:
+        return None
+
+
+def _detect_chromedriver_major_version(driver_path: Optional[str]) -> Optional[int]:
+    """Return the major version for an existing chromedriver binary."""
+
+    if not driver_path or not os.path.exists(driver_path):
+        return None
+
+    try:
+        output = subprocess.check_output([driver_path, "--version"], text=True).strip()
+    except Exception:
+        return None
+
+    match = re.search(r"ChromeDriver (\d+)\.", output)
+    if not match:
+        return None
+    try:
+        return int(match.group(1))
+    except ValueError:
+        return None
 
 
 def get_chrome_options(download_dir=None):
     """
-    Get ChromeOptions with common settings, proxy if configured, and download preferences if download_dir provided.
+    Build ChromeOptions with common scraper defaults and optional download directory.
 
     Args:
-        download_dir (str, optional): Directory for downloads. If provided, sets download preferences.
+        download_dir (str, optional): Directory where Chrome should store downloads.
 
     Returns:
-        ChromeOptions: Configured Chrome options
+        ChromeOptions: Configured options instance.
     """
     options = ChromeOptions()
     if os.getenv('HEADLESS', 'true').lower() != 'false':
@@ -81,22 +126,20 @@ def get_chrome_options(download_dir=None):
     options.add_argument('--disable-images')
     options.add_argument('--disable-plugins')
     options.add_argument('--disable-extensions')
-    options.add_argument('--user-agent=Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/142.0.0.0 Safari/537.36')
+    options.add_argument('--user-agent=Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36')
 
-    # Use Squid proxy (unauthenticated local proxy forwarding to IPRoyal proxying service).
-    squid_proxy = "http://squid:8888"  # Hardcode for clarity; matches Docker Compose env
     if PROXY_URL:
         options.add_argument(f'--proxy-server={PROXY_URL}')
         print(f"Using proxy server {PROXY_URL}")
     else:
         print("**NO PROXY CONFIGURED** - running without proxy")
-        # For local testing, don't set proxy
+
     if download_dir:
         options.add_experimental_option("prefs", {
             "download.default_directory": download_dir,
             "download.prompt_for_download": False,
             "download.directory_upgrade": True,
-            "plugins.always_open_pdf_externally": True
+            "plugins.always_open_pdf_externally": True,
         })
 
     return options
@@ -116,13 +159,52 @@ def create_chrome_driver(options=None, download_dir=None):
     if options is None:
         options = get_chrome_options(download_dir)
 
-    if os.getenv('USE_TESTING_CHROMEDRIVER') == 'true':
-        # Auto-download chromedriver for local testing (pre-dockerization behavior)
-        driver = uc.Chrome(options=options)
+    chrome_binary = _detect_chrome_binary()
+    if chrome_binary:
+        try:
+            options.binary_location = chrome_binary
+            print(f"Using Chrome binary at {chrome_binary}")
+        except Exception:
+            print(f"Detected Chrome binary at {chrome_binary} but failed to assign to options.")
+
+    detected_major = _detect_chrome_major_version(chrome_binary)
+    if detected_major:
+        print(f"Detected Chrome major version {detected_major}")
+
+    use_testing_driver = os.getenv('USE_TESTING_CHROMEDRIVER', '').lower() == 'true'
+    system_driver_path = '/usr/bin/chromedriver'
+
+    driver_executable_path = None
+    if not use_testing_driver and os.path.exists(system_driver_path):
+        print(f"Using system chromedriver at {system_driver_path}")
+        driver_executable_path = system_driver_path
     else:
-        # Use system chromedriver for Docker/production
-        driver_executable_path = '/usr/bin/chromedriver'
-        driver = uc.Chrome(options=options, driver_executable_path=driver_executable_path)
+        temp_dir = tempfile.mkdtemp(prefix="chromedriver_", suffix="_temp")
+        patcher = uc.Patcher(
+            version_main=detected_major or 0,
+            force=True,
+        )
+        patcher.data_path = temp_dir
+        patcher.zip_path = os.path.join(temp_dir, "undetected")
+        exe_basename = os.path.basename(patcher.executable_path)
+        patcher.executable_path = os.path.join(temp_dir, exe_basename)
+        patcher.auto()
+        driver_executable_path = patcher.executable_path
+        downloaded_major = _detect_chromedriver_major_version(driver_executable_path)
+        if detected_major and downloaded_major and downloaded_major != detected_major:
+            print(
+                f"Warning: downloaded chromedriver major version {downloaded_major} does not match "
+                f"Chrome major version {detected_major}."
+            )
+        print(f"Temp chromedriver ready at {driver_executable_path}")
+
+    # Explicitly pass parameters to avoid unpacking issues
+    driver = uc.Chrome(
+        options=options,
+        browser_executable_path=chrome_binary,
+        version_main=detected_major,
+        driver_executable_path=driver_executable_path
+    )
 
     target_download_dir = download_dir
     if not target_download_dir and options is not None:
