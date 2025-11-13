@@ -16,73 +16,95 @@ BRAND_CONFIGS: Dict[str, BrandConfig] = {
     "whirlpool": BrandConfig(
         brand="whirlpool",
         display_name="Whirlpool",
-        domains=["whirlpool.com"],
+        domains=[
+            # "whirlpool.com",
+        ],
         additional_queries=[
-            "{brand} {model} tech sheet filetype:pdf",
-            "{brand} {model} installation instructions filetype:pdf",
+            # "{brand} {model} tech sheet filetype:pdf",
+            # "{brand} {model} installation instructions filetype:pdf",
         ],
     ),
     "ge": BrandConfig(
         brand="ge",
         display_name="GE",
-        domains=["geappliances.com", "products.geappliances.com"],
+        domains=[
+            # "geappliances.com",
+            # "products.geappliances.com",
+        ],
         additional_queries=[
-            "{brand} {model} owner's manual filetype:pdf",
-            "{brand} {model} service manual filetype:pdf",
+            # "{brand} {model} owner's manual filetype:pdf",
+            # "{brand} {model} service manual filetype:pdf",
         ],
     ),
     "lg": BrandConfig(
         brand="lg",
         display_name="LG",
-        domains=["lg.com", "lge.com"],
+        domains=[
+            # "lg.com",
+            # "lge.com",
+        ],
         additional_queries=[
-            "{brand} {model} manual filetype:pdf",
-            "{brand} {model} owners manual filetype:pdf",
+            # "{brand} {model} manual filetype:pdf",
+            # "{brand} {model} owners manual filetype:pdf",
         ],
     ),
     "kitchenaid": BrandConfig(
         brand="kitchenaid",
         display_name="KitchenAid",
-        domains=["kitchenaid.com"],
+        domains=[
+            # "kitchenaid.com",
+        ],
         additional_queries=[
-            "{brand} {model} manual filetype:pdf",
-            "{brand} {model} quick start guide filetype:pdf",
+            # "{brand} {model} manual filetype:pdf",
+            # "{brand} {model} quick start guide filetype:pdf",
         ],
     ),
     "samsung": BrandConfig(
         brand="samsung",
         display_name="Samsung",
-        domains=["samsung.com", "downloadcenter.samsung.com"],
+        domains=[
+            # "samsung.com",
+            # "downloadcenter.samsung.com",
+        ],
         additional_queries=[
-            "{brand} {model} user manual filetype:pdf",
-            "{brand} {model} installation manual filetype:pdf",
+            # "{brand} {model} user manual filetype:pdf",
+            # "{brand} {model} installation manual filetype:pdf",
         ],
     ),
     "frigidaire": BrandConfig(
         brand="frigidaire",
         display_name="Frigidaire",
-        domains=["frigidaire.com", "electroluxmedia.com"],
+        domains=[
+            # "frigidaire.com",
+            # "electroluxmedia.com",
+        ],
         additional_queries=[
-            "{brand} {model} owners manual filetype:pdf",
-            "{brand} {model} installation instructions filetype:pdf",
+            # "{brand} {model} owners manual filetype:pdf",
+            # "{brand} {model} installation instructions filetype:pdf",
         ],
     ),
     "aosmith": BrandConfig(
         brand="aosmith",
         display_name="AO Smith",
-        domains=["hotwater.com", "aosmith.com"],
+        domains=[
+            # "hotwater.com",
+            # "aosmith.com",
+        ],
         additional_queries=[
-            "{brand} {model} manual filetype:pdf",
-            "{brand} {model} installation manual filetype:pdf",
+            # "{brand} {model} manual filetype:pdf",
+            # "{brand} {model} installation manual filetype:pdf",
         ],
     ),
     "rheem": BrandConfig(
         brand="rheem",
         display_name="Rheem",
-        domains=["rheem.com", "nwd.rheem.com"],
+        domains=[
+            # "rheem.com",
+            # "nwd.rheem.com",
+        ],
         additional_queries=[
-            "{brand} {model} manual filetype:pdf",
-            "{brand} {model} installation instructions filetype:pdf",
+            # "{brand} {model} manual filetype:pdf",
+            # "{brand} {model} installation instructions filetype:pdf",
         ],
     ),
 }
@@ -111,24 +133,30 @@ def build_queries(config: BrandConfig, model: str) -> List[str]:
     normalized_model = model.strip()
 
     # Domain-targeted queries first.
-    for domain in config.domains:
-        domain = domain.strip()
-        if not domain:
-            continue
-        queries.append(
-            f"{config.display_name} {normalized_model} owner's manual filetype:pdf site:{domain}"
-        )
-        queries.append(
-            f"{config.display_name} {normalized_model} manual filetype:pdf site:{domain}"
-        )
+    # for domain in config.domains:
+    #     domain = domain.strip()
+    #     if not domain:
+    #         continue
+    #     queries.append(
+    #         f"{config.display_name} {normalized_model} owner's manual filetype:pdf site:{domain}"
+    #     )
+    #     queries.append(
+    #         f"{config.display_name} {normalized_model} manual filetype:pdf site:{domain}"
+    #     )
 
     # Brand-specific templates.
-    for template in config.additional_queries:
-        queries.append(template.format(model=normalized_model, brand=config.display_name))
+    # for template in config.additional_queries:
+    #     queries.append(template.format(model=normalized_model, brand=config.display_name))
 
     # Shared templates.
-    for template in DEFAULT_QUERY_TEMPLATES:
-        queries.append(template.format(model=normalized_model, brand=config.display_name))
+    # for template in DEFAULT_QUERY_TEMPLATES:
+    #     queries.append(template.format(model=normalized_model, brand=config.display_name))
+
+    brand_model = " ".join(part for part in [config.display_name, normalized_model] if part)
+    if brand_model:
+        queries.append(f'{brand_model} "owner\'s manual" site:manualslib.com')
+    else:
+        queries.append('"owner\'s manual" site:manualslib.com')
 
     # Deduplicate while preserving order.
     deduped: List[str] = []

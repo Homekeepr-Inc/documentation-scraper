@@ -28,6 +28,11 @@ from utils import (  # type: ignore  # pylint: disable=import-error
     validate_pdf_file,
 )
 from .headless_pdf_fetcher import download_pdf_with_headless, get_host
+from .manualslib_scraper import (
+    ManualslibDownload,
+    download_manual_from_product_page,
+    is_manualslib_product_url,
+)
 from app.config import DOWNLOAD_TIMEOUT, USER_AGENT, PROXY_URL
 
 PdfResult = Dict[str, Any]
@@ -805,7 +810,7 @@ def collect_candidates(
         url = result.get("link") or result.get("redirect_link")
         if not url or url in seen_urls:
             continue
-        if not is_probable_pdf(url):
+        if not is_probable_pdf(url) and not is_manualslib_product_url(url):
             continue
         if is_disallowed_locale_url(url):
             logger.debug("Skipping candidate due to disallowed locale url=%s", url)
@@ -1022,10 +1027,28 @@ def attempt_candidate(candidate: Dict[str, Any], *, brand: str, model: str) -> O
         return None
     temp_dir = create_temp_download_dir()
     try:
-        local_path = download_pdf(candidate["url"], temp_dir, brand=brand, model=model)
-        if not local_path:
-            cleanup_temp_dir(temp_dir)
-            return None
+        manualslib_download: Optional[ManualslibDownload] = None
+        candidate_url = candidate.get("url") or ""
+
+        if candidate_url and is_manualslib_product_url(candidate_url):
+            logger.info("Detected ManualsLib candidate url=%s", candidate_url)
+            manualslib_download = download_manual_from_product_page(
+                candidate_url,
+                download_dir=temp_dir,
+            )
+            if not manualslib_download:
+                cleanup_temp_dir(temp_dir)
+                return None
+            local_path = manualslib_download.pdf_path
+            file_url = manualslib_download.download_url
+            source_url = manualslib_download.manual_page_url
+        else:
+            local_path = download_pdf(candidate["url"], temp_dir, brand=brand, model=model)
+            if not local_path:
+                cleanup_temp_dir(temp_dir)
+                return None
+            file_url = candidate.get("url")
+            source_url = candidate.get("url")
 
         if not validate_pdf_file(local_path):
             logger.info("Validation failed for candidate url=%s", candidate.get("url"))
@@ -1049,8 +1072,8 @@ def attempt_candidate(candidate: Dict[str, Any], *, brand: str, model: str) -> O
             "model_number": model,
             "doc_type": resolved_doc_type,
             "title": candidate.get("title") or f"{brand} {model} manual",
-            "source_url": candidate.get("url"),
-            "file_url": candidate.get("url"),
+            "source_url": source_url,
+            "file_url": file_url,
             "local_path": local_path,
             "serpapi_metadata": {
                 "score": candidate.get("score"),
@@ -1062,6 +1085,14 @@ def attempt_candidate(candidate: Dict[str, Any], *, brand: str, model: str) -> O
                 "pdf_analysis_reason": analysis.get("reason"),
             },
         }
+        if manualslib_download:
+            result["serpapi_metadata"].update(
+                {
+                    "manualslib_product_url": manualslib_download.product_url,
+                    "manualslib_manual_url": manualslib_download.manual_page_url,
+                    "manualslib_download_url": manualslib_download.download_url,
+                }
+            )
         logger.info(
             "Validation passed for candidate url=%s doc_type=%s score=%s",
             candidate.get("url"),
