@@ -36,8 +36,9 @@ from utils import (  # type: ignore  # pylint: disable=import-error
     wait_for_download,
 )
 
-from captcha_solver import CaptchaSolver  # type: ignore
 import time
+
+from .ai_captcha_bridge import detect_recaptcha, solve_recaptcha_if_present
 
 logger = logging.getLogger("serpapi.manualslib")
 
@@ -121,27 +122,16 @@ def _handle_captcha(
     Returns True when no CAPTCHA is present or after a successful solve.
     """
 
-    solver = CaptchaSolver(driver)
-    logger.debug("(%s) Checking for CAPTCHA challenge", context)
-    try:
-        captcha_type = solver.detect_type()
-    except Exception as exc:  # pylint: disable=broad-except
-        logger.exception("(%s) CAPTCHA detection raised an exception: %s", context, exc)
-        return False
-
-    if captcha_type != "recaptcha_v2":
-        logger.debug("(%s) No CAPTCHA detected", context)
+    logger.debug("(%s) Checking for reCAPTCHA challenge", context)
+    if not detect_recaptcha(driver):
+        logger.debug("(%s) No reCAPTCHA iframe detected", context)
         return True
 
-    logger.info("(%s) Detected reCAPTCHA v2 challenge", context)
-    try:
-        if not solver.solve_recaptcha_v2():
-            logger.warning("(%s) Failed to solve reCAPTCHA challenge", context)
-            return False
-        logger.info("(%s) Successfully solved reCAPTCHA challenge", context)
-    except Exception as exc:  # pylint: disable=broad-except
-        logger.exception("(%s) Unexpected error while solving reCAPTCHA: %s", context, exc)
+    solved = solve_recaptcha_if_present(driver, context=context, logger=logger)
+    if not solved:
+        logger.warning("(%s) Failed to solve reCAPTCHA challenge", context)
         return False
+    logger.info("(%s) Successfully solved reCAPTCHA challenge", context)
 
     if not click_get_manual:
         return True
@@ -153,6 +143,13 @@ def _handle_captcha(
         get_manual_button.click()
         logger.info("(%s) Clicked 'Get manual' button after CAPTCHA solve", context)
         time.sleep(2)
+        if not solve_recaptcha_if_present(
+            driver,
+            context=f"{context}:post-get-manual",
+            logger=logger,
+        ):
+            logger.warning("(%s) Additional reCAPTCHA after 'Get manual' click failed", context)
+            return False
     except TimeoutException:
         logger.warning("(%s) Could not find or click 'Get manual' button after CAPTCHA", context)
         return False

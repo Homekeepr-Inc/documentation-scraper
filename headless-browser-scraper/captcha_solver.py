@@ -1,19 +1,26 @@
+import hashlib
 import logging
 import os
 import random
 import re
 import time
 from datetime import datetime
-from concurrent.futures import ThreadPoolExecutor, as_completed
-from typing import Optional, Set, List, Tuple
+from concurrent.futures import ThreadPoolExecutor, as_completed, TimeoutError as FuturesTimeoutError
+from typing import Any, Optional, Set, List, Dict
 
 from PIL import Image
-import imageio
-from selenium.common.exceptions import StaleElementReferenceException, TimeoutException
+from selenium.common.exceptions import (
+    ElementClickInterceptedException,
+    ElementNotInteractableException,
+    MoveTargetOutOfBoundsException,
+    NoSuchElementException,
+    StaleElementReferenceException,
+    TimeoutException,
+)
 from selenium.webdriver.common.by import By
+from selenium.webdriver.common.action_chains import ActionChains
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.support.ui import WebDriverWait
-from selenium.webdriver.support.wait import WebDriverWait as Wait  # Alias if needed
 
 from ai_utils import (
     ask_recaptcha_instructions_to_gemini,
@@ -23,6 +30,9 @@ from ai_utils import (
 
 
 class CaptchaSolver:
+    MAX_CLASSIFICATION_WORKERS = 6
+    LLM_DECISION_TIMEOUT = 25
+
     def __init__(self, driver, model='gemini-2.5-pro'):
         self.driver = driver
         self.model = model
@@ -87,7 +97,7 @@ class CaptchaSolver:
         """Solve reCAPTCHA v2 by persistently handling challenges until completion or max rounds reached."""
         screenshot_paths = []
         total_rounds = 0
-        clicked_tile_indices: Set[int] = set()
+        clicked_tile_records: Dict[int, Dict[str, Any]] = {}
         last_object_name = ""
         last_click_count = 0
 
@@ -168,7 +178,7 @@ class CaptchaSolver:
                     self._click_skip_button()
                     self.driver.switch_to.default_content()
                     time.sleep(1.5)
-                    clicked_tile_indices.clear()
+                    clicked_tile_records.clear()
                     last_object_name = ""
                     last_click_count = 0
                     continue
@@ -176,7 +186,7 @@ class CaptchaSolver:
                 # Detect new task (object change or many prior clicks)
                 is_new_object = object_name.lower() != last_object_name.lower()
                 if is_new_object or last_click_count >= 3:
-                    clicked_tile_indices.clear()
+                    clicked_tile_records.clear()
                     if is_new_object:
                         self.logger.debug("Round %d: new object '%s'; resetting clicked tiles", total_rounds, object_name)
                     else:
@@ -200,52 +210,159 @@ class CaptchaSolver:
                     self.driver.switch_to.default_content()
                     continue
 
-                tile_llm_paths = []
-                for i, tile in enumerate(tiles):
-                    tile_path = os.path.join(self.screenshot_dir, f"tile_round_{total_rounds}_{i}.png")
-                    tile.screenshot(tile_path)
-                    screenshot_paths.append(tile_path)
-                    tile_llm_paths.append(self._prepare_image_for_llm(tile_path, suffix=f"tile_round_{total_rounds}_{i}"))
+                tile_snapshots = self._capture_tile_snapshots(
+                    tiles,
+                    total_rounds,
+                    snapshot_iteration=0,
+                    screenshot_paths=screenshot_paths,
+                )
+                snapshot_iteration = 0
+                classification_pass = 0
+                newly_clicked_total: List[int] = []
+                while True:
+                    classification_pass += 1
+                    indices_to_classify: List[int] = []
+                    for idx, snapshot in tile_snapshots.items():
+                        if snapshot["mode"] not in {"plain", "checkbox"}:
+                            continue
+                        record = clicked_tile_records.get(idx)
+                        if (
+                            record
+                            and record.get("digest") == snapshot["digest"]
+                            and record.get("mode") == snapshot["mode"]
+                        ):
+                            continue
+                        indices_to_classify.append(idx)
+                    if not indices_to_classify:
+                        self.logger.debug(
+                            "Round %d: no tiles left to classify in pass %d",
+                            total_rounds,
+                            classification_pass,
+                        )
+                        last_click_count = 0
+                        break
 
-                # Classify tiles in parallel
                 selected_indices: Set[int] = set()
-                max_workers = min(6, max(1, len(tiles)))
-                with ThreadPoolExecutor(max_workers=max_workers) as executor:
+                newly_clicked: List[int] = []
+                max_workers = min(self.MAX_CLASSIFICATION_WORKERS, len(indices_to_classify))
+                self.logger.info(
+                    "Round %d pass %d: classifying %d tile(s) with %d worker(s)",
+                    total_rounds,
+                    classification_pass,
+                    len(indices_to_classify),
+                    max_workers,
+                )
+                with ThreadPoolExecutor(max_workers=max_workers or 1) as executor:
                     futures = {
                         executor.submit(
                             self._classify_tile,
                             total_rounds,
-                            i,
-                            tile_llm_paths[i],
+                            idx,
+                            tile_snapshots[idx]["llm_path"],
                             object_name,
                             challenge_llm_path,
-                        ): i
-                        for i in range(len(tiles))
+                        ): idx
+                        for idx in indices_to_classify
                     }
                     for future in as_completed(futures):
-                        idx, response = future.result()
+                        idx = futures[future]
+                        try:
+                            result_idx, response = future.result(timeout=self.LLM_DECISION_TIMEOUT)
+                        except FuturesTimeoutError:
+                            self.logger.warning(
+                                "Round %d tile %d classification timed out after %ds; retrying synchronously",
+                                total_rounds,
+                                idx,
+                                self.LLM_DECISION_TIMEOUT,
+                            )
+                            future.cancel()
+                            result_idx, response = self._classify_tile(
+                                total_rounds,
+                                idx,
+                                tile_snapshots[idx]["llm_path"],
+                                object_name,
+                                challenge_llm_path,
+                            )
                         if response == "true":
-                            selected_indices.add(idx)
+                            selected_indices.add(result_idx)
+                            current_digest = tile_snapshots[result_idx]["digest"]
+                            record = clicked_tile_records.get(result_idx)
+                            if record and record.get("digest") == current_digest:
+                                continue
+                            new_mode = self._click_tile_immediately(
+                                tiles, result_idx, total_rounds, tile_snapshots[result_idx]
+                            )
+                            if new_mode:
+                                clicked_tile_records[result_idx] = {
+                                    "digest": current_digest,
+                                    "mode": new_mode,
+                                }
+                                newly_clicked.append(result_idx)
+                            else:
+                                self.logger.debug(
+                                    "Round %d: tile %d marked positive but click skipped",
+                                    total_rounds,
+                                    result_idx,
+                                )
+                        elif response is None:
+                            self.logger.debug(
+                                "Round %d tile %d classification returned no decision",
+                                total_rounds,
+                                idx,
+                            )
 
-                new_tiles = sorted(idx for idx in selected_indices if idx not in clicked_tile_indices)
                 self.logger.info(
-                    "Round %d: AI selected %s (new: %s)",
+                    "Round %d pass %d: AI marked tiles %s for clicking",
                     total_rounds,
+                    classification_pass,
                     sorted(selected_indices),
-                    new_tiles,
                 )
-                last_click_count = len(new_tiles)
+                if not selected_indices:
+                    last_click_count = 0
+                    break
 
-                # Click new tiles
-                for idx in new_tiles:
-                    try:
-                        if tiles[idx].is_displayed() and tiles[idx].is_enabled():
-                            tiles[idx].click()
-                            time.sleep(random.uniform(0.2, 0.5))
-                    except (StaleElementReferenceException, Exception) as exc:
-                        self.logger.debug("Failed to click tile %d in round %d: %s", idx, total_rounds, exc)
+                if not newly_clicked:
+                    self.logger.debug(
+                        "Round %d pass %d: all positive tiles already clicked",
+                        total_rounds,
+                        classification_pass,
+                    )
+                    last_click_count = 0
+                    break
 
-                clicked_tile_indices.update(new_tiles)
+                newly_clicked_total.extend(newly_clicked)
+                last_click_count = len(newly_clicked)
+
+                if not self._wait_for_tile_refresh(
+                    tiles,
+                    total_rounds,
+                    newly_clicked,
+                    tile_snapshots,
+                ):
+                    self.logger.debug(
+                        "Round %d pass %d: no tile refresh detected after clicks",
+                        total_rounds,
+                        classification_pass,
+                    )
+                    break
+
+                snapshot_iteration += 1
+                tile_snapshots = self._capture_tile_snapshots(
+                    tiles,
+                    total_rounds,
+                    snapshot_iteration=snapshot_iteration,
+                    screenshot_paths=screenshot_paths,
+                )
+                self._reset_clicked_records_if_tiles_changed(
+                    clicked_tile_records,
+                    tile_snapshots,
+                )
+
+                self.logger.info(
+                    "Round %d: AI clicked tiles %s during challenge",
+                    total_rounds,
+                    sorted(set(newly_clicked_total)),
+                )
 
                 # Attempt to verify
                 challenge_completed = False
@@ -293,6 +410,243 @@ class CaptchaSolver:
             return False
         finally:
             self.driver.switch_to.default_content()
+
+    def _click_tile_immediately(
+        self,
+        tiles: List,
+        idx: int,
+        round_number: int,
+        snapshot: Dict[str, Any],
+    ) -> Optional[str]:
+        """Click a tile when classification comes back positive.
+
+        Returns the tile's mode after the click when a click occurs, otherwise None.
+        """
+        try:
+            tile = tiles[idx]
+            if snapshot.get("mode") == "tileselected":
+                self.logger.debug("Round %d: tile %d already selected; skipping", round_number, idx)
+                return None
+            self._scroll_into_view(tile)
+            click_targets = []
+            if snapshot.get("has_checkbox"):
+                try:
+                    click_targets.append(
+                        ("checkbox", tile.find_element(By.CLASS_NAME, "rc-imageselect-checkbox"))
+                    )
+                except NoSuchElementException:
+                    self.logger.debug(
+                        "Round %d: tile %d checkbox not located; falling back to non-checkbox targets",
+                        round_number,
+                        idx,
+                    )
+            click_targets.append(("tile", tile))
+            for cls_name in ("rc-image-tile-target", "rc-image-tile-wrapper"):
+                try:
+                    click_targets.append((cls_name, tile.find_element(By.CLASS_NAME, cls_name)))
+                except NoSuchElementException:
+                    continue
+
+            tried_labels = []
+            for label, candidate in click_targets:
+                tried_labels.append(label)
+                if not candidate.is_displayed():
+                    continue
+                strategy = self._click_with_fallbacks(candidate)
+                if not strategy and candidate is not tile:
+                    strategy = self._click_with_fallbacks(tile)
+                if strategy:
+                    self.logger.info(
+                        "Round %d: clicked tile %d (%s mode via %s on %s)",
+                        round_number,
+                        idx,
+                        snapshot.get("mode"),
+                        strategy,
+                        label,
+                    )
+                    time.sleep(random.uniform(0.2, 0.5))
+                    updated_mode = self._derive_tile_mode(
+                        tile.get_attribute("class") or "",
+                        self._tile_has_checkbox(tile),
+                    )
+                    return updated_mode
+            self.logger.debug(
+                "Round %d: tile %d could not be clicked; attempted targets=%s",
+                round_number,
+                idx,
+                tried_labels,
+            )
+            return None
+        except (StaleElementReferenceException, Exception) as exc:
+            self.logger.debug("Round %d: failed to click tile %d: %s", round_number, idx, exc)
+            return None
+
+    def _click_with_fallbacks(self, element) -> Optional[str]:
+        """Try multiple click strategies; return the strategy name on success."""
+        strategies = (
+            ("native", lambda el: el.click()),
+            (
+                "action_chains",
+                lambda el: ActionChains(self.driver)
+                .move_to_element(el)
+                .pause(random.uniform(0.05, 0.15))
+                .click()
+                .perform(),
+            ),
+            ("javascript", lambda el: self.driver.execute_script("arguments[0].click();", el)),
+        )
+        for name, action in strategies:
+            try:
+                action(element)
+                return name
+            except (
+                ElementClickInterceptedException,
+                ElementNotInteractableException,
+                MoveTargetOutOfBoundsException,
+                StaleElementReferenceException,
+            ) as exc:
+                self.logger.debug("Click strategy %s failed: %s", name, exc)
+            except Exception as exc:  # pylint: disable=broad-except
+                self.logger.debug("Click strategy %s raised %s", name, exc)
+        return None
+
+    def _scroll_into_view(self, element):
+        try:
+            self.driver.execute_script(
+                "arguments[0].scrollIntoView({block: 'center', inline: 'center'});", element
+            )
+            time.sleep(random.uniform(0.05, 0.1))
+        except Exception:  # pylint: disable=broad-except
+            pass
+
+    def _capture_tile_snapshots(
+        self,
+        tiles: List,
+        round_number: int,
+        snapshot_iteration: int,
+        screenshot_paths: List[str],
+    ) -> Dict[int, Dict[str, Any]]:
+        """Screenshot tiles and record hashes so we can detect fade-in replacements."""
+        snapshots: Dict[int, Dict[str, Any]] = {}
+        for idx, tile in enumerate(tiles):
+            base_name = f"tile_round_{round_number}_{snapshot_iteration}_{idx}"
+            tile_path = os.path.join(self.screenshot_dir, f"{base_name}.png")
+            tile.screenshot(tile_path)
+            screenshot_paths.append(tile_path)
+            llm_path = self._prepare_image_for_llm(tile_path, suffix=base_name)
+            digest = self._hash_file(tile_path)
+            class_attr = tile.get_attribute("class") or ""
+            has_checkbox = False
+            try:
+                tile.find_element(By.CLASS_NAME, "rc-imageselect-checkbox")
+                has_checkbox = True
+            except NoSuchElementException:
+                has_checkbox = False
+            mode = self._derive_tile_mode(class_attr, has_checkbox)
+            snapshots[idx] = {
+                "raw_path": tile_path,
+                "llm_path": llm_path,
+                "digest": digest,
+                "class": class_attr,
+                "has_checkbox": has_checkbox,
+                "mode": mode,
+            }
+        return snapshots
+
+    def _derive_tile_mode(self, class_attr: str, has_checkbox: bool) -> str:
+        lowered = class_attr.lower()
+        if "rc-imageselect-dynamic-selected" in lowered:
+            return "dynamic-selected"
+        if "rc-imageselect-tileselected" in lowered:
+            return "tileselected"
+        if has_checkbox:
+            return "checkbox"
+        return "plain"
+
+    def _tile_has_checkbox(self, tile) -> bool:
+        try:
+            tile.find_element(By.CLASS_NAME, "rc-imageselect-checkbox")
+            return True
+        except (NoSuchElementException, StaleElementReferenceException):
+            return False
+
+    def _hash_file(self, file_path: str) -> str:
+        try:
+            with open(file_path, "rb") as file_handle:
+                return hashlib.md5(file_handle.read()).hexdigest()
+        except Exception as exc:  # pylint: disable=broad-except
+            self.logger.debug("Unable to hash file %s: %s", file_path, exc)
+            return ""
+
+    def _wait_for_tile_refresh(
+        self,
+        tiles: List,
+        round_number: int,
+        clicked_indices: List[int],
+        previous_snapshots: Dict[int, Dict[str, Any]],
+        max_wait: float = 6.0,
+    ) -> bool:
+        """Wait for any of the clicked tiles to refresh with new imagery."""
+        if not clicked_indices:
+            return False
+        baseline = {
+            idx: {
+                "digest": previous_snapshots.get(idx, {}).get("digest"),
+                "mode": previous_snapshots.get(idx, {}).get("mode"),
+            }
+            for idx in clicked_indices
+        }
+        start_time = time.time()
+        while time.time() - start_time < max_wait:
+            time.sleep(0.55)
+            changed = []
+            for idx in clicked_indices:
+                original = baseline.get(idx)
+                if not original:
+                    continue
+                try:
+                    png_bytes = tiles[idx].screenshot_as_png
+                    class_attr = tiles[idx].get_attribute("class") or ""
+                except Exception as exc:  # pylint: disable=broad-except
+                    self.logger.debug(
+                        "Round %d: unable to rescreenshot tile %d during refresh detection: %s",
+                        round_number,
+                        idx,
+                        exc,
+                    )
+                    continue
+                new_digest = hashlib.md5(png_bytes).hexdigest()
+                new_mode = self._derive_tile_mode(
+                    class_attr,
+                    self._tile_has_checkbox(tiles[idx]),
+                )
+                if new_digest != original["digest"] or new_mode != original["mode"]:
+                    changed.append(idx)
+            if changed:
+                self.logger.info(
+                    "Round %d: detected refreshed tiles %s",
+                    round_number,
+                    changed,
+                )
+                return True
+        return False
+
+    def _reset_clicked_records_if_tiles_changed(
+        self,
+        clicked_records: Dict[int, Dict[str, Any]],
+        tile_snapshots: Dict[int, Dict[str, Any]],
+    ):
+        """Drop clicked records for tiles whose content changed so they can be reclassified."""
+        stale_indices = [
+            idx
+            for idx, record in clicked_records.items()
+            if (
+                tile_snapshots.get(idx, {}).get("digest") != record.get("digest")
+                or tile_snapshots.get(idx, {}).get("mode") != record.get("mode")
+            )
+        ]
+        for idx in stale_indices:
+            clicked_records.pop(idx, None)
 
     def _click_recaptcha_checkbox(self):
         """Click the reCAPTCHA checkbox via JS to avoid overlay interception."""
