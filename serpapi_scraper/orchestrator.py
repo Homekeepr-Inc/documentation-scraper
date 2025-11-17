@@ -1014,6 +1014,29 @@ def download_pdf(url: str, temp_dir: str, *, brand: str, model: str) -> Optional
         session.close()
 
 
+def download_manualslib_candidate(
+    product_url: str,
+    download_dir: str,
+) -> Optional[ManualslibDownload]:
+    """
+    Wrapper around download_manual_from_product_page with logging/guards so the orchestrator
+    can treat ManualsLib URLs as first-class candidates.
+    """
+
+    if not product_url or not is_manualslib_product_url(product_url):
+        return None
+
+    logger.info("Detected ManualsLib candidate url=%s", product_url)
+    try:
+        return download_manual_from_product_page(
+            product_url,
+            download_dir=download_dir,
+        )
+    except Exception as exc:  # pylint: disable=broad-except
+        logger.exception("ManualsLib download failed for url=%s: %s", product_url, exc)
+        return None
+
+
 def attempt_candidate(candidate: Dict[str, Any], *, brand: str, model: str) -> Optional[PdfResult]:
     logger.info(
         "Attempting candidate url=%s score=%s source=%s",
@@ -1030,15 +1053,13 @@ def attempt_candidate(candidate: Dict[str, Any], *, brand: str, model: str) -> O
         manualslib_download: Optional[ManualslibDownload] = None
         candidate_url = candidate.get("url") or ""
 
-        if candidate_url and is_manualslib_product_url(candidate_url):
-            logger.info("Detected ManualsLib candidate url=%s", candidate_url)
-            manualslib_download = download_manual_from_product_page(
-                candidate_url,
-                download_dir=temp_dir,
-            )
-            if not manualslib_download:
+        if candidate_url:
+            manualslib_download = download_manualslib_candidate(candidate_url, temp_dir)
+            if not manualslib_download and is_manualslib_product_url(candidate_url):
                 cleanup_temp_dir(temp_dir)
                 return None
+
+        if manualslib_download:
             local_path = manualslib_download.pdf_path
             file_url = manualslib_download.download_url
             source_url = manualslib_download.manual_page_url
