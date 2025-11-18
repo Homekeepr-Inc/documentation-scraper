@@ -12,47 +12,66 @@ Maintaining the current custom AI captcha solver has shown to be very time consu
 
 ## 2. Proposed Changes
 
-### A. Modify `serpapi_scraper/ai_captcha_bridge.py`
-We will completely rewrite the implementation of `solve_recaptcha_if_present` to use the 2Captcha API instead of the local AI solver.
+### A. Infrastructure Changes (Proxy Consistency)
+**CRITICAL:** ManualsLib validates that the IP solving the captcha (2Captcha worker) matches the IP submitting the form (our scraper).
+Our current setup uses a local Squid proxy (`http://squid:8888`) which round-robins between multiple external upstream proxies. This causes a mismatch because we cannot tell 2Captcha which upstream Squid will pick for the next request.
+
+To fix this, we must enforce a 1:1 mapping between the scraper container and the upstream proxy.
+
+1.  **Modify `squid/squid.conf.template`**:
+    *   Expose multiple ports (e.g., 8888, 8889).
+    *   Use ACLs to map `port 8888` exclusively to `upstream1`.
+    *   Use ACLs to map `port 8889` exclusively to `upstream2`.
+    *   Remove `round-robin` configuration.
+
+2.  **Modify `docker-compose.yml`**:
+    *   Split the `app` service into `app-group-1` and `app-group-2` (instead of `replicas: 4`).
+    *   **App Group 1**:
+        *   `PROXY_URL=http://squid:8888` (Internal Squid port for Selenium)
+        *   `TWO_CAPTCHA_PROXY=${UPSTREAM_1_PROTO}://${UPSTREAM_1_USER_PASS}@${UPSTREAM_1_HOST}:${UPSTREAM_PROXY_PORT}` (Public upstream for 2Captcha)
+    *   **App Group 2**:
+        *   `PROXY_URL=http://squid:8889`
+        *   `TWO_CAPTCHA_PROXY=${UPSTREAM_2_PROTO}://${UPSTREAM_2_USER_PASS}@${UPSTREAM_2_HOST}:${UPSTREAM_PROXY_PORT}`
+
+### B. Modify `serpapi_scraper/ai_captcha_bridge.py`
+We will completely rewrite the implementation of `solve_recaptcha_if_present` to use the 2Captcha API.
 
 1.  **Remove Dependencies:**
     *   Remove imports and logic related to `ai-captcha-bypass` and dynamic module loading.
-    *   Remove Selenium interactions that click tiles or checkboxes (2Captcha solves it server-side).
+    *   Remove Selenium interactions that click tiles or checkboxes.
 
 2.  **Implement 2Captcha Logic:**
-    *   **Sitekey Extraction:** Implement a helper to extract the `data-sitekey` from the `div.g-recaptcha` element or the `k` parameter from the reCAPTCHA iframe `src`.
-    *   **API Submission:** Send the `sitekey` and the current page URL (`driver.current_url`) to 2Captcha's `in.php` endpoint.
-    *   **Polling:** Poll 2Captcha's `res.php` endpoint until a solution token is received.
-        *   **Initial Delay:** Wait 15-20 seconds before the first poll request to allow the worker time to solve.
-        *   **Polling Interval:** Poll every 5 seconds thereafter.
-        *   **Timeout:** Implement a strict timeout (e.g., 120 seconds) to prevent infinite loops if the service is slow.
-    *   **Error Handling:** Handle specific API responses:
-        *   `CAPCHA_NOT_READY`: Continue polling.
-        *   `ERROR_ZERO_BALANCE`, `ERROR_WRONG_USER_KEY`: Log error and fail fast.
-    *   **Token Injection:** Once the token is received, use `driver.execute_script` to inject it into the hidden `g-recaptcha-response` textarea.
-        *   **Selector:** Use `[name="g-recaptcha-response"]` to ensure compatibility with the scraper's logic (which specifically looks for this name).
-        *   **Visibility:** Optionally make the element visible (`display: block`) for debugging, though strictly setting the `.value` is sufficient for the scraper's AJAX hook.
+    *   **Sitekey Extraction:** Extract `data-sitekey` from `.g-recaptcha` or `iframe[src*="recaptcha"]`.
+    *   **Data-S Extraction:** Check for the `data-s` attribute on the reCAPTCHA container. This is a one-time token used by some sites (like ManualsLib) for extra verification and **must** be passed to 2Captcha if present.
+    *   **API Submission:**
+        *   Send `sitekey`, `pageurl`, `userAgent`, and `data-s` (if found).
+        *   **Proxy Handling:** Check for `TWO_CAPTCHA_PROXY` environment variable.
+            *   If present, parse it into `proxy` (`login:pass@ip:port`) and `proxytype` (`HTTP`).
+            *   If absent, fall back to `PROXY_URL` (only if it's not a local/internal proxy).
+            *   **Fail-safe:** If no valid public proxy is available, log a warning (ManualsLib will likely reject the token).
+    *   **Polling:** Poll `res.php` every 5 seconds (after initial 20s delay) until success or timeout (120s).
+    *   **Token Injection:** Inject the response token into `[name="g-recaptcha-response"]`.
 
 3.  **Environment Configuration:**
-    *   The implementation will require a `TWO_CAPTCHA_API_KEY` environment variable.
-
-### B. Verification
-*   The `manualslib_scraper.py` logic relies on reading the value of `[name="g-recaptcha-response"]` to construct its AJAX payload. By injecting the 2Captcha token into this element, the existing scraper logic will work without modification.
+    *   `TWO_CAPTCHA_API_KEY`: Required.
+    *   `TWO_CAPTCHA_PROXY`: Required for IP consistency (set in docker-compose).
+    *   `CAPTCHA_SOLVER`: Defaults to `2captcha`. Set to `legacy` to rollback.
+    *   Refer to `docs/manualslib_proxy_strategy.md` for the multi-proxy/Squid layout and container-to-proxy assignment details.
 
 ## 3. Step-by-Step Implementation Plan
 
-1.  **Update `serpapi_scraper/ai_captcha_bridge.py`**:
-    *   Import `requests` and `time`.
-    *   Define `TWO_CAPTCHA_API_KEY` from `os.getenv`.
-    *   Create `solve_recaptcha_v2(driver)` function that:
-        *   Finds the sitekey.
-        *   Submits the job to 2Captcha.
-        *   Waits for the result (with backoff and timeout).
-        *   Injects the result into the DOM.
-    *   Update `solve_recaptcha_if_present` to call this new function.
+1.  **Infrastructure Prep**:
+    *   Update `squid/squid.conf.template` to support port-based routing.
+    *   Update `docker-compose.yml` to define `app-group-1` and `app-group-2` with correct env vars.
 
-2.  **Testing**:
-    *   Verify that `manualslib_scraper.py` successfully downloads manuals when a captcha is presented.
+2.  **Update `serpapi_scraper/ai_captcha_bridge.py`**:
+    *   Implement `solve_recaptcha_v2` with 2Captcha API integration.
+    *   Add logic to parse `TWO_CAPTCHA_PROXY`.
+    *   Add logic to extract `data-s`.
+
+3.  **Testing**:
+    *   Verify that `manualslib_scraper.py` successfully downloads manuals.
+    *   Check logs to ensure `proxy` is being sent to 2Captcha and matches the upstream used by Squid.
 
 ## 4. Code Snippet for `ai_captcha_bridge.py` (Preview)
 
@@ -60,65 +79,43 @@ We will completely rewrite the implementation of `solve_recaptcha_if_present` to
 import time
 import requests
 import os
+from urllib.parse import urlparse
+from app.config import PROXY_URL, USER_AGENT
+
+def format_proxy_for_2captcha(proxy_url):
+    """Convert http://user:pass@host:port to user:pass@host:port"""
+    try:
+        parsed = urlparse(proxy_url)
+        return f"{parsed.username}:{parsed.password}@{parsed.hostname}:{parsed.port}"
+    except Exception:
+        return None
 
 def solve_recaptcha_if_present(driver: WebDriver, ...) -> bool:
-    # 1. Extract Sitekey
-    try:
-        # Try finding the container first
-        element = driver.find_element(By.CLASS_NAME, "g-recaptcha")
-        site_key = element.get_attribute("data-sitekey")
-        
-        # Fallback: Extract from iframe src
-        if not site_key:
-            iframe = driver.find_element(By.XPATH, "//iframe[contains(@src, 'recaptcha')]")
-            src = iframe.get_attribute("src")
-            # ... parse 'k' parameter from src ...
-    except Exception:
-        return False # No captcha found
+    # ... (sitekey & data-s extraction) ...
 
-    if not site_key:
-        return False
-
-    # 2. Submit to 2Captcha
     api_key = os.getenv("TWO_CAPTCHA_API_KEY")
-    if not api_key:
-        return False
-        
-    response = requests.post("http://2captcha.com/in.php", data={
+    public_proxy = os.getenv("TWO_CAPTCHA_PROXY")
+    
+    payload = {
         "key": api_key,
         "method": "userrecaptcha",
         "googlekey": site_key,
         "pageurl": driver.current_url,
-        "json": 1
-    })
-    request_id = response.json().get("request")
+        "json": 1,
+        "userAgent": USER_AGENT
+    }
     
-    # 3. Poll for Result
-    time.sleep(20) # Initial wait
-    for _ in range(20): # Max ~120s total
-        res = requests.get(f"http://2captcha.com/res.php?key={api_key}&action=get&id={request_id}&json=1")
-        result = res.json()
-        
-        if result.get("status") == 1:
-            token = result.get("request")
-            
-            # 4. Inject Token
-            driver.execute_script(f"""
-                var el = document.querySelector('[name="g-recaptcha-response"]');
-                if (el) {{
-                    el.innerHTML = '{token}';
-                    el.value = '{token}';
-                }}
-            """)
-            return True
-            
-        if result.get("request") != "CAPCHA_NOT_READY":
-            # Fatal error
-            return False
-            
-        time.sleep(5)
-        
-    return False
+    if data_s:
+        payload["data-s"] = data_s
+
+    if public_proxy:
+        payload["proxy"] = format_proxy_for_2captcha(public_proxy)
+        payload["proxytype"] = "HTTP"
+    else:
+        # Fallback or warning if using local proxy
+        pass
+
+    # ... (submit & poll) ...
 ```
 
 ## References
