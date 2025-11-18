@@ -164,8 +164,7 @@ def scrape_brand_model(brand: str, model: str):
     global is_scraping  # pylint: disable=global-statement
     brand = brand.lower()
     supported_brands = {'ge', 'lg', 'kitchenaid', 'whirlpool', 'samsung', 'frigidaire', 'aosmith', 'rheem'}
-    if brand not in supported_brands:
-        raise HTTPException(status_code=400, detail="Unsupported brand")
+    brand_supported = brand in supported_brands
 
     normalized_model = normalize_model(model)
 
@@ -202,7 +201,7 @@ def scrape_brand_model(brand: str, model: str):
                     exc,
                 )
 
-        if result is None:
+        if result is None and brand_supported:
             if brand == 'ge':
                 result = scrape_ge_manual(model)
             elif brand == 'lg':
@@ -219,8 +218,6 @@ def scrape_brand_model(brand: str, model: str):
                 result = scrape_aosmith_manual(model)
             elif brand == 'rheem':
                 result = scrape_rheem_manual(model)
-            else:
-                result = None
 
         if not result:
             raise HTTPException(status_code=404, detail="No manual found")
@@ -228,25 +225,30 @@ def scrape_brand_model(brand: str, model: str):
         # Handle case where result is a list (take first result)
         if isinstance(result, list):
             result = result[0]
-        # Select ingest function based on brand
-        if brand == 'ge':
-            ingest_func = ingest_ge_manual
-        elif brand == 'lg':
-            ingest_func = ingest_lg_manual
-        elif brand == 'kitchenaid':
-            ingest_func = ingest_kitchenaid_manual
-        elif brand == 'whirlpool':
-            ingest_func = ingest_whirlpool_manual
-        elif brand == 'samsung':
-            ingest_func = ingest_samsung_manual
-        elif brand == 'frigidaire':
-            ingest_func = ingest_frigidaire_manual
-        elif brand == 'aosmith':
-            ingest_func = ingest_aosmith_manual
-        elif brand == 'rheem':
-            ingest_func = ingest_rheem_manual
+
+        if brand_supported:
+            # Select ingest function based on brand
+            if brand == 'ge':
+                ingest_func = ingest_ge_manual
+            elif brand == 'lg':
+                ingest_func = ingest_lg_manual
+            elif brand == 'kitchenaid':
+                ingest_func = ingest_kitchenaid_manual
+            elif brand == 'whirlpool':
+                ingest_func = ingest_whirlpool_manual
+            elif brand == 'samsung':
+                ingest_func = ingest_samsung_manual
+            elif brand == 'frigidaire':
+                ingest_func = ingest_frigidaire_manual
+            elif brand == 'aosmith':
+                ingest_func = ingest_aosmith_manual
+            elif brand == 'rheem':
+                ingest_func = ingest_rheem_manual
     
-        ingest_result = ingest_func(result)
+            ingest_result = ingest_func(result)
+        else:
+            ingest_result = validate_and_ingest_manual(result)
+
         if not ingest_result or not ingest_result.id:
             # Check if already exists
             doc = get_db().execute("SELECT id FROM documents WHERE file_url = ?", (result['file_url'],)).fetchone()
