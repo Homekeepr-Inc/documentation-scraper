@@ -5,10 +5,16 @@ services:
     env_file:
       - .env
     environment:
-      - PROXY_URL=http://squid:8888  # Point to Squid (unauthenticated locally)
+      - PROXY_PROFILE_NAMES=${PROXY_PROFILE_NAMES:-proxy_a,proxy_b}
+      - PROXY_PROXY_A_SQUID_URL=http://squid-proxy-a:8888
+      - PROXY_PROXY_A_PUBLIC_URL=${PROXY_A_PUBLIC_URL:-}
+      - PROXY_PROXY_A_TYPE=${PROXY_A_TYPE:-HTTP}
+      - PROXY_PROXY_B_SQUID_URL=http://squid-proxy-b:8888
+      - PROXY_PROXY_B_PUBLIC_URL=${PROXY_B_PUBLIC_URL:-}
+      - PROXY_PROXY_B_TYPE=${PROXY_B_TYPE:-HTTP}
     volumes:
       - manuals_data:/app/data
-    command: ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+    command: ["./bin/start_with_proxy.py"]
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
       interval: 30s
@@ -18,17 +24,28 @@ services:
     networks:
       - app_network
     depends_on:
-      - squid  # Ensure Squid starts first
+      - squid-proxy-a
+      - squid-proxy-b
     deploy:
       replicas: 4  # Scale to multiple instances for parallelism
 
-  squid:
+  squid-proxy-a:
     build: ./squid
     env_file:
       - .env
+    environment:
+      - UPSTREAM_PROXY_URLS=${PROXY_A_PUBLIC_URL:-}
     networks:
       - app_network
-    # No ports exposed externally (internal only)
+
+  squid-proxy-b:
+    build: ./squid
+    env_file:
+      - .env
+    environment:
+      - UPSTREAM_PROXY_URLS=${PROXY_B_PUBLIC_URL:-}
+    networks:
+      - app_network
 
   caddy:
     image: caddy:2

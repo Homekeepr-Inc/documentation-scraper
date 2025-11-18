@@ -12,8 +12,10 @@ import os
 import random
 import sys
 import time
-from typing import Optional, Sequence, Tuple
+from typing import NamedTuple, Optional, Sequence, Tuple
+from urllib.parse import parse_qs, urlparse
 
+import requests
 from selenium.common.exceptions import (
     ElementClickInterceptedException,
     TimeoutException,
@@ -22,6 +24,8 @@ from selenium.webdriver.common.by import By
 from selenium.webdriver.remote.webdriver import WebDriver
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.support.ui import WebDriverWait
+
+from app.config import PROXY_URL, USER_AGENT
 
 AI_SOLVER_PATH = os.path.abspath(os.path.join(os.path.dirname(__file__), "ai-captcha-bypass"))
 AI_MAIN_PATH = os.path.join(AI_SOLVER_PATH, "main.py")
@@ -50,6 +54,25 @@ ANCHOR_IFRAME_SELECTORS: Sequence[AnchorSelector] = (
     (By.CSS_SELECTOR, "iframe[src*='recaptcha']"),
     (By.CSS_SELECTOR, "iframe[title*='reCAPTCHA']"),
 )
+
+CAPTCHA_SOLVER_ENV = "CAPTCHA_SOLVER"
+CAPTCHA_SOLVER_TWO_CAPTCHA = "2captcha"
+CAPTCHA_SOLVER_LEGACY = "legacy"
+
+TWO_CAPTCHA_API_KEY_ENV = "TWO_CAPTCHA_API_KEY"
+TWO_CAPTCHA_PROXY_ENV = "TWO_CAPTCHA_PROXY"
+TWO_CAPTCHA_PROXY_TYPE_ENV = "TWO_CAPTCHA_PROXY_TYPE"
+TWO_CAPTCHA_SUBMIT_URL = "https://2captcha.com/in.php"
+TWO_CAPTCHA_RESULT_URL = "https://2captcha.com/res.php"
+TWO_CAPTCHA_INITIAL_WAIT = 20
+TWO_CAPTCHA_POLL_INTERVAL = 5
+TWO_CAPTCHA_TIMEOUT = 120
+REQUEST_TIMEOUT = 30
+
+
+class ProxySettings(NamedTuple):
+    address: str
+    proxy_type: str
 
 def _normalize_provider(raw: Optional[str]) -> str:
     provider = (raw or os.getenv("AI_CAPTCHA_PROVIDER") or "gemini").strip().lower()
@@ -181,6 +204,45 @@ def _get_captcha_solver() -> str:
     return CAPTCHA_SOLVER_TWO_CAPTCHA
 
 
+def _resolve_two_captcha_proxy(log: logging.Logger) -> Optional[ProxySettings]:
+    raw_proxy = (os.getenv(TWO_CAPTCHA_PROXY_ENV) or PROXY_URL or "").strip()
+    if not raw_proxy:
+        return None
+
+    try:
+        parsed = urlparse(raw_proxy)
+    except ValueError as exc:
+        log.warning("Invalid proxy URL %s for 2Captcha: %s", raw_proxy, exc)
+        return None
+
+    host = parsed.hostname
+    port = parsed.port
+    if not host or not port:
+        log.warning("Proxy URL %s missing host or port for 2Captcha usage", raw_proxy)
+        return None
+
+    credentials = ""
+    if parsed.username:
+        credentials = parsed.username
+        if parsed.password:
+            credentials += f":{parsed.password}"
+        credentials += "@"
+
+    proxy_type = os.getenv(TWO_CAPTCHA_PROXY_TYPE_ENV) or (parsed.scheme or "http")
+    proxy_type = proxy_type.upper()
+    if proxy_type not in {"HTTP", "HTTPS", "SOCKS4", "SOCKS5"}:
+        if proxy_type.startswith("SOCKS5"):
+            proxy_type = "SOCKS5"
+        elif proxy_type.startswith("SOCKS4"):
+            proxy_type = "SOCKS4"
+        else:
+            proxy_type = "HTTP"
+
+    address = f"{credentials}{host}:{port}"
+    log.debug("Using proxy for 2Captcha proxy=%s type=%s", address.rsplit("@", 1)[-1], proxy_type)
+    return ProxySettings(address=address, proxy_type=proxy_type)
+
+
 def _extract_site_details(driver: WebDriver, log: logging.Logger) -> Tuple[Optional[str], Optional[str]]:
     driver.switch_to.default_content()
     selectors = (
@@ -215,6 +277,43 @@ def _extract_site_details(driver: WebDriver, log: logging.Logger) -> Tuple[Optio
             if value and value[0]:
                 return value[0], None
     return None, None
+
+
+def _submit_two_captcha_request(
+    site_key: str,
+    page_url: str,
+    api_key: str,
+    log: logging.Logger,
+    *,
+    data_s: Optional[str],
+    proxy_settings: Optional[ProxySettings],
+) -> Optional[str]:
+    payload = {
+        "key": api_key,
+        "method": "userrecaptcha",
+        "googlekey": site_key,
+        "pageurl": page_url,
+        "json": 1,
+        "userAgent": USER_AGENT,
+    }
+    if data_s:
+        payload["data-s"] = data_s
+    if proxy_settings:
+        payload["proxy"] = proxy_settings.address
+        payload["proxytype"] = proxy_settings.proxy_type
+
+    try:
+        response = requests.post(TWO_CAPTCHA_SUBMIT_URL, data=payload, timeout=REQUEST_TIMEOUT)
+        response.raise_for_status()
+        data = response.json()
+    except (requests.RequestException, ValueError) as exc:
+        log.error("Failed to submit challenge to 2Captcha: %s", exc)
+        return None
+
+    if data.get("status") != 1:
+        log.error("2Captcha submission error: %s", data.get("request"))
+        return None
+    return data.get("request")
 
 
 def _poll_two_captcha_solution(request_id: str, api_key: str, log: logging.Logger) -> Optional[str]:
@@ -383,7 +482,6 @@ def _solve_with_legacy_ai(
         log.warning("(%s) reCAPTCHA solver could not complete the challenge", context)
         return False
 
-    # Wait briefly for the checkbox state to propagate.
     for _ in range(3):
         if _verify_anchor_checked(driver, ANCHOR_IFRAME_SELECTORS):
             log.info("(%s) reCAPTCHA solved successfully", context)

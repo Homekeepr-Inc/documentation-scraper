@@ -1,13 +1,14 @@
 FROM alpine:latest
 
-RUN apk add --no-cache squid gettext
+RUN apk add --no-cache squid gettext python3
+
+WORKDIR /app/squid
 
 COPY squid.conf.template /etc/squid/squid.conf.template
+COPY start.sh render_cache_peer.py ./
+
+RUN chmod +x /app/squid/start.sh /app/squid/render_cache_peer.py
 
 EXPOSE 8888
 
-CMD envsubst < /etc/squid/squid.conf.template > /etc/squid/squid.conf && \
-    echo "--- Generated squid.conf ---" && \
-    cat /etc/squid/squid.conf && \
-    echo "--- End Generated squid.conf ---" && \
-    squid -f /etc/squid/squid.conf -N
+ENTRYPOINT ["/app/squid/start.sh"]
