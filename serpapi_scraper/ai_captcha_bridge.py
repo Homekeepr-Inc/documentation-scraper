@@ -239,7 +239,7 @@ def _resolve_two_captcha_proxy(log: logging.Logger) -> Optional[ProxySettings]:
             proxy_type = "HTTP"
 
     address = f"{credentials}{host}:{port}"
-    log.debug("Using proxy for 2Captcha proxy=%s type=%s", address.rsplit("@", 1)[-1], proxy_type)
+    log.info("Using proxy for 2Captcha proxy=%s type=%s", address.rsplit("@", 1)[-1], proxy_type)
     return ProxySettings(address=address, proxy_type=proxy_type)
 
 
@@ -359,17 +359,44 @@ def _inject_recaptcha_token(driver: WebDriver, token: str, log: logging.Logger) 
         driver.execute_script(
             """
             const value = arguments[0];
-            let textarea = document.querySelector('[name="g-recaptcha-response"]');
-            if (!textarea) {
-                textarea = document.createElement('textarea');
+
+            // 1. Update all existing textareas with the correct name
+            const existing = document.querySelectorAll('[name="g-recaptcha-response"]');
+            let updated = false;
+            existing.forEach(el => {
+                el.value = value;
+                el.innerHTML = value;
+                el.dispatchEvent(new Event('input', { bubbles: true }));
+                el.dispatchEvent(new Event('change', { bubbles: true }));
+                updated = true;
+            });
+
+            // 2. If none found, create one in the most likely container
+            if (!updated) {
+                const textarea = document.createElement('textarea');
                 textarea.name = 'g-recaptcha-response';
                 textarea.style.display = 'none';
-                document.body.appendChild(textarea);
+                textarea.value = value;
+                textarea.innerHTML = value;
+
+                const container = document.getElementById('dl_captcha')
+                               || document.querySelector('.g-recaptcha')
+                               || document.body;
+                container.appendChild(textarea);
+
+                textarea.dispatchEvent(new Event('input', { bubbles: true }));
+                textarea.dispatchEvent(new Event('change', { bubbles: true }));
             }
-            textarea.value = value;
-            textarea.innerHTML = value;
-            textarea.dispatchEvent(new Event('input', { bubbles: true }));
-            textarea.dispatchEvent(new Event('change', { bubbles: true }));
+
+            // 3. Trigger data-callback if present on the reCAPTCHA container
+            const recaptchaEl = document.querySelector('.g-recaptcha[data-callback]')
+                             || document.querySelector('[data-callback]');
+            if (recaptchaEl) {
+                const callbackName = recaptchaEl.getAttribute('data-callback');
+                if (callbackName && typeof window[callbackName] === 'function') {
+                    window[callbackName](value);
+                }
+            }
             """,
             token,
         )
@@ -393,10 +420,11 @@ def _solve_with_two_captcha(driver: WebDriver, context: str, log: logging.Logger
     proxy_settings = _resolve_two_captcha_proxy(log)
     proxy_desc = proxy_settings.address.split("@", 1)[-1] if proxy_settings else "none"
     log.info(
-        "(%s) Submitting reCAPTCHA challenge to 2Captcha (sitekey=%s proxy=%s)",
+        "(%s) Submitting reCAPTCHA challenge to 2Captcha (sitekey=%s proxy=%s data_s=%s)",
         context,
         site_key[:8] + "...",
         proxy_desc,
+        "yes" if data_s else "no",
     )
     request_id = _submit_two_captcha_request(
         site_key,

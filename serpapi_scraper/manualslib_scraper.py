@@ -56,6 +56,7 @@ DOWNLOAD_LINK_SELECTOR = "a.download-url"
 VIEW_LINK_SELECTOR = "a.view-url"
 DOWNLOAD_ERROR_SELECTOR = "span.download-error"
 CAPTCHA_DOWNLOAD_ERROR_RETRIES = 2
+CAPTCHA_DEBUG_HTML_LIMIT = 200
 
 
 def _preview_data(value: Any, *, limit: int = 600) -> str:
@@ -607,6 +608,95 @@ def _clear_manualslib_download_state(driver) -> None:
             setattr(driver, "_manualslib_direct_download", False)
 
 
+def _truncate_debug_value(value: Optional[str], limit: int = CAPTCHA_DEBUG_HTML_LIMIT) -> str:
+    if not value:
+        return "<empty>"
+    if len(value) <= limit:
+        return value
+    return f"{value[:limit]}...<truncated>"
+
+
+def _dump_captcha_debug_snapshot(driver, *, context: str, reason: str) -> None:
+    """Print DOM/console diagnostics to stdout when ManualsLib rejects captcha tokens."""
+
+    prefix = "[Manualslib CAPTCHA Debug]"
+    timestamp = time.strftime("%Y-%m-%d %H:%M:%S", time.gmtime())
+    print(f"{prefix} ts={timestamp}Z context={context} reason={reason}")
+
+    snapshot = None
+    try:
+        snapshot = driver.execute_script(
+            """
+            const root = document.getElementById('dl_captcha');
+            const serializeTextarea = (el) => ({
+                id: el.id || null,
+                classes: el.className || null,
+                value: el.value || '',
+                parentId: el.parentElement ? el.parentElement.id || null : null,
+                parentClasses: el.parentElement ? el.parentElement.className || null : null,
+                inDlCaptcha: root ? root.contains(el) : false,
+            });
+            return {
+                dlCaptchaHtml: root ? root.outerHTML : null,
+                dlCaptchaText: root ? root.innerText || '' : null,
+                textareaSnapshots: Array.from(
+                    document.querySelectorAll('[name="g-recaptcha-response"]')
+                ).map(serializeTextarea),
+                downloadResponse: window.__manualslibDownloadResponse || null,
+                ajaxPayload: window.__manualslibAjaxPayload || null,
+            };
+            """
+        )
+    except Exception as exc:  # pylint: disable=broad-except
+        print(f"{prefix} Failed to capture DOM snapshot: {exc}")
+
+    if isinstance(snapshot, dict):
+        dl_html = _truncate_debug_value(snapshot.get("dlCaptchaHtml"))
+        print(f"{prefix} #dl_captcha outerHTML: {dl_html}")
+        dl_text = _truncate_debug_value(snapshot.get("dlCaptchaText") or "", limit=800)
+        print(f"{prefix} #dl_captcha text: {dl_text}")
+
+        textarea_snapshots = snapshot.get("textareaSnapshots") or []
+        if textarea_snapshots:
+            print(f"{prefix} Found {len(textarea_snapshots)} g-recaptcha-response inputs:")
+            for idx, entry in enumerate(textarea_snapshots, start=1):
+                value = entry.get("value") or ""
+                preview = value[:32] + ("..." if len(value) > 32 else "")
+                print(
+                    f"{prefix}   [{idx}] len={len(value)} preview={preview!r} "
+                    f"id={entry.get('id')} classes={entry.get('classes')} "
+                    f"parent_id={entry.get('parentId')} in_dl_captcha={entry.get('inDlCaptcha')}"
+                )
+        else:
+            print(f"{prefix} No g-recaptcha-response inputs found on page")
+
+        response_preview = _preview_data(snapshot.get("downloadResponse"))
+        print(f"{prefix} window.__manualslibDownloadResponse: {response_preview}")
+        payload_preview = _preview_data(snapshot.get("ajaxPayload"))
+        print(f"{prefix} window.__manualslibAjaxPayload: {payload_preview}")
+    else:
+        print(f"{prefix} DOM snapshot unavailable")
+
+    try:
+        console_logs = driver.get_log("browser")
+    except Exception as exc:  # pylint: disable=broad-except
+        print(f"{prefix} Unable to fetch browser console logs: {exc}")
+        return
+
+    if not console_logs:
+        print(f"{prefix} Browser console logs: <empty>")
+        return
+
+    print(f"{prefix} Last {min(len(console_logs), 20)} browser console entries:")
+    for entry in console_logs[-20:]:
+        level = entry.get("level")
+        message = entry.get("message")
+        timestamp_ms = entry.get("timestamp")
+        print(
+            f"{prefix}   [{level}] ts={timestamp_ms} msg={message}"
+        )
+
+
 def _download_error_present(driver, *, context: str, logger: logging.Logger) -> bool:
     """Check for the ManualsLib download error message or AJAX error payload."""
 
@@ -626,12 +716,22 @@ def _download_error_present(driver, *, context: str, logger: logging.Logger) -> 
                 error_text,
                 _preview_data(response),
             )
+            _dump_captcha_debug_snapshot(
+                driver,
+                context=context,
+                reason=f"ajax_error:{error_text}",
+            )
             return True
         if not error_text and not has_direct_url:
             logger.warning(
                 "(%s) Download AJAX payload missing direct_url and error text; payload=%s",
                 context,
                 _preview_data(response),
+            )
+            _dump_captcha_debug_snapshot(
+                driver,
+                context=context,
+                reason="ajax_missing_direct_url",
             )
             return True
 
@@ -649,6 +749,11 @@ def _download_error_present(driver, *, context: str, logger: logging.Logger) -> 
             continue
         if "something went wrong" in text.lower():
             logger.warning("(%s) Download page error message detected: %s", context, text)
+            _dump_captcha_debug_snapshot(
+                driver,
+                context=context,
+                reason=f"dom_error:{text[:40]}",
+            )
             return True
 
     return False
