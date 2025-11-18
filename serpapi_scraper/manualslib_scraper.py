@@ -54,6 +54,8 @@ PRE_DOWNLOAD_BUTTON_SELECTOR = "download-manual-btn"
 DOWNLOAD_BUTTON_SELECTOR = "get-manual-button"
 DOWNLOAD_LINK_SELECTOR = "a.download-url"
 VIEW_LINK_SELECTOR = "a.view-url"
+DOWNLOAD_ERROR_SELECTOR = "span.download-error"
+CAPTCHA_DOWNLOAD_ERROR_RETRIES = 2
 
 
 def _preview_data(value: Any, *, limit: int = 600) -> str:
@@ -582,6 +584,66 @@ def _click_final_download_link(driver, *, context: str, logger: logging.Logger) 
     return False
 
 
+def _clear_manualslib_download_state(driver) -> None:
+    """Reset any cached AJAX payload/response markers between retries."""
+
+    try:
+        driver.execute_script(
+            """
+            if (window) {
+                window.__manualslibDownloadResponse = null;
+                window.__manualslibDownloadPayload = null;
+                window.__manualslibAjaxPayload = null;
+            }
+            """
+        )
+    except Exception:  # pylint: disable=broad-except
+        pass
+
+    if hasattr(driver, "_manualslib_direct_download"):
+        try:
+            delattr(driver, "_manualslib_direct_download")
+        except Exception:  # pylint: disable=broad-except
+            setattr(driver, "_manualslib_direct_download", False)
+
+
+def _download_error_present(driver, *, context: str, logger: logging.Logger) -> bool:
+    """Check for the ManualsLib download error message or AJAX error payload."""
+
+    response = _get_cached_ajax_download_response(
+        driver,
+        context=context,
+        logger=logger,
+        log_missing=False,
+    )
+    if response and response.get("error") and not (response.get("url") or response.get("customPdfPath")):
+        logger.warning(
+            "(%s) Download AJAX response reported error=%s payload=%s",
+            context,
+            response.get("error"),
+            _preview_data(response),
+        )
+        return True
+
+    try:
+        elements = driver.find_elements(By.CSS_SELECTOR, DOWNLOAD_ERROR_SELECTOR)
+    except Exception:  # pylint: disable=broad-except
+        elements = []
+
+    for element in elements:
+        try:
+            text = (element.text or "").strip()
+        except Exception:  # pylint: disable=broad-except
+            continue
+        if not text:
+            continue
+        if "something went wrong" in text.lower():
+            logger.warning("(%s) Download page error message detected: %s", context, text)
+            return True
+
+    return False
+
+
 def _handle_captcha(
     driver,
     *,
@@ -594,25 +656,47 @@ def _handle_captcha(
     Returns True when no CAPTCHA is present or after a successful solve.
     """
 
-    logger.debug("(%s) Checking for reCAPTCHA challenge", context)
-    captcha_present = detect_recaptcha(driver)
-    if captcha_present:
-        solved = solve_recaptcha_if_present(driver, context=context, logger=logger)
-        if not solved:
-            logger.warning("(%s) Failed to solve reCAPTCHA challenge", context)
+    max_attempts = CAPTCHA_DOWNLOAD_ERROR_RETRIES + 1
+    for attempt in range(1, max_attempts + 1):
+        logger.debug("(%s) Checking for reCAPTCHA challenge attempt=%s", context, attempt)
+        captcha_present = detect_recaptcha(driver)
+        if captcha_present:
+            solved = solve_recaptcha_if_present(driver, context=context, logger=logger)
+            if not solved:
+                logger.warning("(%s) Failed to solve reCAPTCHA challenge", context)
+                return False
+            logger.info("(%s) Successfully solved reCAPTCHA challenge", context)
+        else:
+            logger.debug("(%s) No reCAPTCHA iframe detected", context)
+
+        if not click_get_manual:
+            return True
+
+        if not _click_get_manual_button(driver, context=context, logger=logger):
             return False
-        logger.info("(%s) Successfully solved reCAPTCHA challenge", context)
-    else:
-        logger.debug("(%s) No reCAPTCHA iframe detected", context)
 
-    if not click_get_manual:
-        return True
+        if not _download_error_present(driver, context=context, logger=logger):
+            logger.debug("(%s) Completed CAPTCHA flow and button click", context)
+            return True
 
-    if not _click_get_manual_button(driver, context=context, logger=logger):
-        return False
+        if attempt >= max_attempts:
+            logger.warning(
+                "(%s) Download error persisted after %s attempts; giving up",
+                context,
+                attempt,
+            )
+            return False
 
-    logger.debug("(%s) Completed CAPTCHA flow and button click", context)
-    return True
+        logger.info(
+            "(%s) Download page error detected post-CAPTCHA; retrying solve (%s/%s)",
+            context,
+            attempt + 1,
+            max_attempts,
+        )
+        _clear_manualslib_download_state(driver)
+        time.sleep(1.0)
+
+    return False
 
 
 def download_manual_from_product_page(
