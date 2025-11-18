@@ -10,6 +10,7 @@ This module focuses on the happy path needed by the SerpApi orchestrator:
 
 from __future__ import annotations
 
+import json
 import logging
 import os
 import sys
@@ -53,6 +54,24 @@ PRE_DOWNLOAD_BUTTON_SELECTOR = "download-manual-btn"
 DOWNLOAD_BUTTON_SELECTOR = "get-manual-button"
 DOWNLOAD_LINK_SELECTOR = "a.download-url"
 VIEW_LINK_SELECTOR = "a.view-url"
+
+
+def _preview_data(value: Any, *, limit: int = 600) -> str:
+    """Return a truncated, logging-friendly preview of arbitrary data."""
+
+    if value is None:
+        return "None"
+    if isinstance(value, (dict, list)):
+        try:
+            text = json.dumps(value, default=str)
+        except TypeError:
+            text = str(value)
+    else:
+        text = str(value)
+    if len(text) > limit:
+        return f"{text[:limit]}...<truncated>"
+    return text
+
 
 @dataclass
 class ManualslibDownload:
@@ -172,7 +191,8 @@ try {
         callback({ok: false, error: 'captcha_block_missing'});
         return;
     }
-    const captchaInput = block.querySelector('[name="g-recaptcha-response"]');
+    const captchaInput = block.querySelector('[name="g-recaptcha-response"]') ||
+        document.querySelector('[name="g-recaptcha-response"]');
     const idInput = block.querySelector('[name="id"]');
     const payload = {
         captcha: captchaInput ? captchaInput.value : '',
@@ -182,25 +202,32 @@ try {
         var2: window.screen ? window.screen.availHeight : null,
         var3: document.referrer || ''
     };
+    window.__manualslibAjaxPayload = payload;
     const jq = window.jQuery || window.$;
     if (!jq || !jq.post) {
-        callback({ok: false, error: 'jquery_missing'});
+        callback({ok: false, error: 'jquery_missing', payload});
         return;
     }
     jq.post('/download', payload)
         .done(function(resp) {
             window.__manualslibDownloadResponse = resp || {};
-            callback({ok: true, resp: resp || {}});
+            callback({ok: true, resp: resp || {}, payload});
         })
         .fail(function(jqXHR, textStatus, errorThrown) {
             callback({
                 ok: false,
                 error: (errorThrown || textStatus || 'request_failed'),
-                status: jqXHR && jqXHR.status
+                status: jqXHR && jqXHR.status,
+                responseText: jqXHR && jqXHR.responseText,
+                payload
             });
         });
 } catch (err) {
-    callback({ok: false, error: err && err.message ? err.message : String(err)});
+    callback({
+        ok: false,
+        error: err && err.message ? err.message : String(err),
+        payload: window.__manualslibAjaxPayload || null
+    });
 }
     """
     try:
@@ -214,8 +241,18 @@ try {
         return None
 
     if result.get("ok"):
-        resp = result.get("resp") or {}
-        if isinstance(resp, dict):
+        resp = _normalize_ajax_response(result.get("resp"), context=context, logger=logger)
+        payload_snapshot = result.get("payload")
+        if resp:
+            logger.info(
+                "(%s) AJAX payload received keys=%s url=%s customPdfPath=%s raw=%s payload=%s",
+                context,
+                sorted(resp.keys()),
+                resp.get("url"),
+                resp.get("customPdfPath"),
+                _preview_data(resp),
+                _preview_data(payload_snapshot),
+            )
             try:
                 driver.execute_script("window.__manualslibDownloadResponse = arguments[0] || {};", resp)
             except Exception:  # pylint: disable=broad-except
@@ -223,21 +260,171 @@ try {
             return resp
 
     logger.warning(
-        "(%s) AJAX download request failed: %s",
+        "(%s) AJAX download request failed: error=%s status=%s raw=%s payload=%s responseText=%s",
         context,
         result.get("error") or "unknown error",
+        result.get("status"),
+        _preview_data(result.get("resp")),
+        _preview_data(result.get("payload")),
+        _preview_data(result.get("responseText")),
     )
     return None
 
 
-def _get_cached_ajax_download_response(driver) -> Optional[Dict[str, Any]]:
+def _normalize_ajax_response(
+    response: Any,
+    *,
+    context: str,
+    logger: logging.Logger,
+) -> Optional[Dict[str, Any]]:
+    """
+    ManualsLib sometimes returns the AJAX payload as a JSON string; normalize to dict.
+    """
+
+    if isinstance(response, dict):
+        return response
+
+    if isinstance(response, str):
+        text = response.strip()
+        if not text:
+            return None
+        try:
+            parsed = json.loads(text)
+        except json.JSONDecodeError as exc:
+            logger.debug("(%s) Could not parse AJAX response JSON: %s", context, exc)
+            return None
+        return parsed if isinstance(parsed, dict) else None
+
+    logger.debug("(%s) Unexpected AJAX response type: %s", context, type(response))
+    return None
+
+
+def _install_ajax_capture_hook(
+    driver,
+    *,
+    context: str,
+    logger: logging.Logger,
+) -> None:
+    """
+    Override the page's $.post so we can capture the real AJAX response triggered by clicks.
+    """
+
+    script = """
+if (!window.__manualslibAjaxHookInstalled) {
+    window.__manualslibAjaxHookInstalled = true;
+    window.__manualslibDownloadPayload = window.__manualslibDownloadPayload || null;
+    window.__manualslibAjaxPayload = window.__manualslibAjaxPayload || null;
+    window.__manualslibDownloadResponse = window.__manualslibDownloadResponse || null;
+    const wrapAjax = function() {
+        const jq = window.jQuery || window.$;
+        if (!jq || !jq.post || jq.__manualslibPostWrapped) {
+            setTimeout(wrapAjax, 400);
+            return;
+        }
+        const originalPost = jq.post;
+        jq.post = function(url, data, success, dataType) {
+            const request = originalPost.apply(this, arguments);
+            if (url === '/download') {
+                window.__manualslibDownloadPayload = data || null;
+                window.__manualslibAjaxPayload = data || null;
+                request.done(function(resp) {
+                    window.__manualslibDownloadResponse = resp || {};
+                });
+                request.fail(function(jqXHR, textStatus, errorThrown) {
+                    window.__manualslibDownloadResponse = {
+                        error: (errorThrown || textStatus || 'request_failed'),
+                        status: jqXHR && jqXHR.status,
+                        responseText: jqXHR && jqXHR.responseText
+                    };
+                });
+            }
+            return request;
+        };
+        jq.__manualslibPostWrapped = true;
+    };
+    wrapAjax();
+}
+return true;
+    """
+    try:
+        driver.execute_script(script)
+        logger.debug("(%s) Installed ManualsLib AJAX capture hook", context)
+    except Exception as exc:  # pylint: disable=broad-except
+        logger.debug("(%s) Failed to install AJAX capture hook: %s", context, exc)
+
+
+def _get_cached_ajax_download_response(
+    driver,
+    *,
+    context: str,
+    logger: logging.Logger,
+    log_missing: bool = True,
+) -> Optional[Dict[str, Any]]:
     """Return the cached AJAX response set on the window, if any."""
 
     try:
         response = driver.execute_script("return window.__manualslibDownloadResponse || null;")
     except Exception:  # pylint: disable=broad-except
         return None
-    return response if isinstance(response, dict) else None
+    normalized = _normalize_ajax_response(response, context=context, logger=logger)
+    if normalized:
+        logger.debug(
+            "(%s) Using cached AJAX response keys=%s url=%s customPdfPath=%s",
+            context,
+            sorted(normalized.keys()),
+            normalized.get("url"),
+            normalized.get("customPdfPath"),
+        )
+    else:
+        if log_missing:
+            logger.debug("(%s) Cached AJAX response missing or invalid", context)
+    return normalized
+
+
+def _get_cached_ajax_payload(driver) -> Optional[Dict[str, Any]]:
+    """Return the last AJAX payload stored on the window, if any."""
+
+    try:
+        payload = driver.execute_script(
+            "return window.__manualslibDownloadPayload || window.__manualslibAjaxPayload || null;"
+        )
+    except Exception:  # pylint: disable=broad-except
+        return None
+    if isinstance(payload, dict):
+        return payload
+    return None
+
+
+def _wait_for_ajax_download_response(
+    driver,
+    *,
+    context: str,
+    logger: logging.Logger,
+    timeout: float = 8.0,
+) -> Optional[Dict[str, Any]]:
+    """Poll for the AJAX response after clicking the button."""
+
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        response = _get_cached_ajax_download_response(
+            driver,
+            context=context,
+            logger=logger,
+            log_missing=False,
+        )
+        if response:
+            payload = _get_cached_ajax_payload(driver)
+            logger.info(
+                "(%s) AJAX response detected post-click keys=%s payload=%s",
+                context,
+                sorted(response.keys()),
+                _preview_data(payload),
+            )
+            return response
+        time.sleep(0.35)
+
+    logger.debug("(%s) Timeout waiting for AJAX response after button click", context)
+    return None
 
 
 def _navigate_via_cached_response(
@@ -249,8 +436,20 @@ def _navigate_via_cached_response(
 ) -> bool:
     """Navigate directly to the download URL captured from the AJAX response."""
 
+    payload = _get_cached_ajax_payload(driver)
     direct_url = response.get("url") or response.get("customPdfPath")
+    logger.debug(
+        "(%s) Direct download URL extracted: %s payload=%s",
+        context,
+        direct_url,
+        _preview_data(payload),
+    )
     if not isinstance(direct_url, str) or not direct_url:
+        logger.warning(
+            "(%s) direct_url missing in AJAX payload; payload=%s",
+            context,
+            _preview_data(response),
+        )
         return False
 
     if response.get("url"):
@@ -272,6 +471,9 @@ def _navigate_via_cached_response(
         )
         return False
 
+    # Mark that we've already kicked off the direct download so later steps
+    # can skip trying to locate DOM links that will no longer exist.
+    setattr(driver, "_manualslib_direct_download", True)
     time.sleep(2)
     return True
 
@@ -287,6 +489,8 @@ def _click_get_manual_button(driver, *, context: str, logger: logging.Logger) ->
         logger.debug("(%s) Download response already cached; skipping button click", context)
         return True
 
+    _install_ajax_capture_hook(driver, context=context, logger=logger)
+
     try:
         button = WebDriverWait(driver, 12).until(
             EC.element_to_be_clickable((By.ID, DOWNLOAD_BUTTON_SELECTOR))
@@ -295,6 +499,22 @@ def _click_get_manual_button(driver, *, context: str, logger: logging.Logger) ->
         logger.warning("(%s) 'Get manual' button not found", context)
         return False
 
+    logger.info("(%s) Clicking 'Get manual' button to trigger real AJAX flow", context)
+    if not _click_element_with_fallback(
+        driver,
+        button,
+        description="ManualsLib get-manual button",
+        logger=logger,
+    ):
+        return False
+
+    ajax_response = _wait_for_ajax_download_response(driver, context=context, logger=logger)
+    if ajax_response:
+        logger.info("(%s) Retrieved download payload via site-triggered AJAX", context)
+        if _navigate_via_cached_response(driver, ajax_response, context=context, logger=logger):
+            return True
+        logger.debug("(%s) Direct navigation via site AJAX payload failed; will retry manual POST", context)
+
     ajax_response = _submit_ajax_get_manual_request(driver, context=context, logger=logger)
     if ajax_response:
         logger.info("(%s) Retrieved download payload via AJAX", context)
@@ -302,13 +522,8 @@ def _click_get_manual_button(driver, *, context: str, logger: logging.Logger) ->
             return True
         logger.debug("(%s) Direct navigation via AJAX payload failed; falling back to DOM click", context)
 
-    logger.debug("(%s) Falling back to DOM click for 'Get manual' button", context)
-    return _click_element_with_fallback(
-        driver,
-        button,
-        description="ManualsLib get-manual button",
-        logger=logger,
-    )
+    logger.debug("(%s) AJAX attempts exhausted; DOM click already performed", context)
+    return True
 
 
 def _click_final_download_link(driver, *, context: str, logger: logging.Logger) -> bool:
@@ -316,11 +531,23 @@ def _click_final_download_link(driver, *, context: str, logger: logging.Logger) 
     Click the final download link (prefer the direct download URL, fall back to view link).
     """
 
-    response = _get_cached_ajax_download_response(driver)
+    if getattr(driver, "_manualslib_direct_download", False):
+        logger.info("(%s) Download already triggered via AJAX payload; skipping final link lookup", context)
+        return True
+
+    response = _get_cached_ajax_download_response(driver, context=context, logger=logger)
     if response:
+        logger.info(
+            "(%s) Attempting direct navigation via cached AJAX response url=%s customPdfPath=%s",
+            context,
+            response.get("url"),
+            response.get("customPdfPath"),
+        )
         if _navigate_via_cached_response(driver, response, context=context, logger=logger):
             return True
         logger.debug("(%s) Cached download response present but navigation failed", context)
+    else:
+        logger.debug("(%s) No cached AJAX response available before final link lookup", context)
 
     selectors = (
         (By.CSS_SELECTOR, DOWNLOAD_LINK_SELECTOR, "download"),
@@ -332,6 +559,7 @@ def _click_final_download_link(driver, *, context: str, logger: logging.Logger) 
                 EC.element_to_be_clickable((by, value))
             )
         except TimeoutException:
+            logger.debug("(%s) Timeout waiting for %s link using selector %s", context, label, value)
             continue
 
         driver.execute_script("arguments[0].setAttribute('target','_self');", link)
