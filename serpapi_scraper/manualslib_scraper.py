@@ -616,14 +616,24 @@ def _download_error_present(driver, *, context: str, logger: logging.Logger) -> 
         logger=logger,
         log_missing=False,
     )
-    if response and response.get("error") and not (response.get("url") or response.get("customPdfPath")):
-        logger.warning(
-            "(%s) Download AJAX response reported error=%s payload=%s",
-            context,
-            response.get("error"),
-            _preview_data(response),
-        )
-        return True
+    if response:
+        has_direct_url = bool(response.get("url") or response.get("customPdfPath"))
+        error_text = (response.get("error") or "").strip()
+        if error_text and not has_direct_url:
+            logger.warning(
+                "(%s) Download AJAX response reported error=%s payload=%s",
+                context,
+                error_text,
+                _preview_data(response),
+            )
+            return True
+        if not error_text and not has_direct_url:
+            logger.warning(
+                "(%s) Download AJAX payload missing direct_url and error text; payload=%s",
+                context,
+                _preview_data(response),
+            )
+            return True
 
     try:
         elements = driver.find_elements(By.CSS_SELECTOR, DOWNLOAD_ERROR_SELECTOR)
