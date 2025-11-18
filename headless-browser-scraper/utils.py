@@ -273,6 +273,81 @@ def _normalize_host(host: str) -> str:
     return parsed.netloc or parsed.path or ""
 
 
+def generate_model_candidates(model: str, max_trim: int = 0) -> List[str]:
+    """
+    Build a list of model-number variants to broaden searches/matching.
+
+    Normalizes whitespace/separators and optionally trims trailing characters, which helps
+    when manufacturers publish manuals under slightly shortened model numbers.
+    """
+    if not model:
+        return []
+
+    raw = model.strip()
+    if not raw:
+        return []
+
+    separator_pattern = re.compile(r"[\s\-_/\.]+")
+    variants: List[str] = []
+    seen = set()
+
+    def add(candidate: str):
+        candidate = candidate.strip()
+        if not candidate or candidate in seen:
+            return
+        variants.append(candidate)
+        seen.add(candidate)
+
+    add(raw)
+
+    normalized_space = separator_pattern.sub(" ", raw)
+    add(normalized_space)
+
+    collapsed = separator_pattern.sub("", raw)
+    add(collapsed)
+
+    hyphenated = separator_pattern.sub("-", raw).strip("-")
+    add(hyphenated)
+
+    def add_trimmed(value: str):
+        trimmed = value
+        for _ in range(max_trim):
+            trimmed = trimmed[:-1].rstrip("-_/ .")
+            if len(trimmed) < 3:
+                break
+            add(trimmed)
+
+    add_trimmed(raw)
+    add_trimmed(collapsed)
+
+    return variants
+
+
+def match_model_in_text(text: str, model: str, max_trim: int = 0) -> Optional[str]:
+    """
+    Attempt to find any model-number variant within the provided text.
+
+    Returns the first variant that matches (case-insensitive), allowing for trimmed or
+    separator-free forms to catch loosely formatted product pages.
+    """
+    if not text or not model:
+        return None
+
+    lowered_text = text.lower()
+    compact_text = re.sub(r"[\s\-_/\.]+", "", lowered_text)
+
+    for candidate in generate_model_candidates(model, max_trim=max_trim):
+        candidate_lower = candidate.lower()
+        if candidate_lower and candidate_lower in lowered_text:
+            return candidate
+
+        compact_candidate = re.sub(r"[\s\-_/\.]+", "", candidate_lower)
+        if compact_candidate and compact_candidate in compact_text:
+            return candidate
+
+    return None
+
+
 def duckduckgo_fallback(
     driver,
     model,
