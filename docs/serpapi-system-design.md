@@ -66,9 +66,8 @@
    - Deduplicate by exact URL before download, then sort by score and attempt the top five results per query.
 6. **Validation Fetch**:
    - Stream download the highest-ranked remaining candidate into a temp directory.
-   - Run `evaluate_pdf_candidate`, which inspects up to the first six pages (20k chars) with `pypdf` to compute `pdf_features` (keyword hits per doc type, marketing signals, manual token count, model presence, page count).
-   - Reject early if heuristics fail: owner manuals shorter than four pages, marketing-weighted PDFs, absence of owner keywords, or failed text extraction unless the fallback image-manual rules apply.
-   - Persist structured `pdf_features` + rejection reason in logs/metadata; on failure clean up and try the next candidate.
+   - Run `validate_pdf_file` to ensure the response is a real PDF; `evaluate_pdf_candidate` now simply echoes the inferred `doc_type` so downstream consumers keep the same schema.
+   - Persist the legacy `pdf_features`/`pdf_analysis_reason` fields as `null`, clean up temp files on failure, and try the next candidate when a download or validation step fails. Downstream ingestion/DQA now owns all semantic correctness checks.
 7. **Ingestion & Quality Checks (Done in Supabase)**:
    - On success, move file to blob storage, compute checksum, capture metadata.
    - Emit job record to ingestion queue for text extraction, chunking, embedding.
@@ -100,14 +99,10 @@
 ### PDF Fetcher & Validator
 - Streams downloads with timeout guard (e.g., 15s) and size ceiling (reject > 25 MB unless brand override).
 - Performs lightweight MIME/content-type verification before persisting to disk.
-- Analyzes the first six pages (max 20k characters) via `pypdf` to populate `pdf_features`:
-  - Keyword hit counts per doc type (`owner`, `installation`, `tech`, `guide`), marketing keyword counts, manual token counts, model-number presence, text extraction success, page count.
-  - Flags `too_short_for_owner` when page_count < 4 so two-page brochures cannot be accepted as owner manuals.
-  - Sets `fallback_image_manual` only when text is absent but the document is long enough (≥5 pages) to plausibly be a scan.
-- When `SERPAPI_USE_GEMINI_VALIDATION` is enabled, upload the first few pages (≤5) of the PDF to Gemini 2.5 Flash and accept only when the model responds “yes” to the owner-manual prompt for the requested brand/model.
-- Rejects candidates that fail heuristics: disallowed doc_type, no manual keywords, marketing-heavy with no owner signal, short owner manuals, or invalid PDFs.
+- Runs `validate_pdf_file` to confirm the bytes are an actual PDF and stops there—no additional heuristics or Gemini checks remain.
+- Calls the simplified `evaluate_pdf_candidate` shim so callers keep receiving `doc_type`, `pdf_features`, and `pdf_analysis_reason` fields; the latter two are now always `null` because the heuristics layer has been removed.
 - Falls back to a minimal headless Chrome downloader for allowlisted hosts (currently Whirlpool) when direct `requests` downloads return 4xx/5xx/timeouts; the helper lives in `serpapi_scraper/headless_pdf_fetcher.py` and simply navigates to the PDF to trigger Chrome's download manager before reusing the same validation pipeline.
-- Provides structured log entries (`serpapi.orchestrator`) for every decision, including `pdf_analysis_reason`, and attaches `pdf_features` to the ingestion metadata for downstream auditing.
+- Provides structured log entries (`serpapi.orchestrator`) for every download attempt and validation outcome so downstream QA can trace decisions.
 - Cleans up temp directories on every failure to avoid orphan files; only accepted manuals flow into ingestion.
 
 ### Ingestion & Data Quality
@@ -131,7 +126,7 @@
 
 ## Monitoring & Alerting
 - Metrics: queries per brand, success/failure counts, average score of accepted PDFs, validation failure reasons, fallback invocations.
-- Logs: structured entries emitted by `serpapi.client` (request lifecycle), `serpapi.orchestrator` (candidate scoring, PDF analysis, rejection reasons), and `ingest` (downstream ingestion) with `brand`, `model`, `search_id`, `candidate_url`, `pdf_analysis_reason`.
+- Logs: structured entries emitted by `serpapi.client` (request lifecycle), `serpapi.orchestrator` (candidate scoring plus download/validation outcomes), and `ingest` (downstream ingestion) with `brand`, `model`, `search_id`, and `candidate_url`.
 - Alerts:
   - High failure rate per brand (>30% over 1h).
   - SerpApi quota nearing threshold.
