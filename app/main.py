@@ -168,7 +168,7 @@ def get_document_text(doc_id: int):
 
 @app.get("/scrape/{brand}/{model:path}")
 def scrape_brand_model(brand: str, model: str):
-    if not _scrape_lock.acquire(blocking=False):
+    if not _scrape_lock.acquire(blocking=True):
         raise HTTPException(status_code=503, detail="Busy")
     brand = brand.lower()
     supported_brands = {'ge', 'lg', 'kitchenaid', 'whirlpool', 'samsung', 'frigidaire', 'aosmith', 'rheem'}
