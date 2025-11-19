@@ -39,6 +39,7 @@ from utils import (  # type: ignore  # pylint: disable=import-error
 logger = logging.getLogger("serpapi.searspartsdirect")
 
 DOWNLOAD_LINK_SELECTOR = "div.download-guide a"
+OWNER_MANUAL_LINK_ID = "model-owner-manual"
 DEFAULT_NAVIGATION_TIMEOUT = 20
 DEFAULT_DOWNLOAD_TIMEOUT = 45
 
@@ -68,27 +69,58 @@ def is_searspartsdirect_manual_page(url: str) -> bool:
     return not path.endswith(".pdf")
 
 
+def _maybe_navigate_to_owner_manual(driver, current_url: str, timeout: int) -> str:
+    """If the search result candidiate link brings us to a model overview page, follow the owner's manual link first."""
+    try:
+        parsed = urlparse(current_url)
+    except Exception:  # pylint: disable=broad-except
+        return current_url
+
+    if not (parsed.netloc and parsed.netloc.lower().endswith("searspartsdirect.com")):
+        return current_url
+
+    path = (parsed.path or "").lower()
+    if not path.startswith("/model"):
+        return current_url
+
+    try:
+        owner_link = WebDriverWait(driver, timeout).until(
+            EC.presence_of_element_located((By.ID, OWNER_MANUAL_LINK_ID))
+        )
+    except TimeoutException:
+        logger.info("Owner manual link not found on model page url=%s", current_url)
+        return current_url
+
+    href = (owner_link.get_attribute("href") or "").strip()
+    if not href:
+        logger.info("Owner manual anchor missing href url=%s", current_url)
+        return current_url
+
+    resolved = urljoin(current_url, href)
+    if resolved == current_url:
+        return current_url
+
+    logger.info("Navigating owner manual link url=%s target=%s", current_url, resolved)
+    safe_driver_get(driver, resolved, timeout=timeout)
+    return resolved
+
+
 def _select_download_anchor(driver, timeout: int):
     """Find the most likely download link inside the download-guide block."""
-
-    wait = WebDriverWait(driver, timeout)
+    logger.info("FINDING DOWNLOAD ANCHOR")
     try:
-        anchors = wait.until(
-            EC.presence_of_all_elements_located((By.CSS_SELECTOR, DOWNLOAD_LINK_SELECTOR))
+        element = WebDriverWait(driver, timeout).until(
+            EC.presence_of_element_located((By.CSS_SELECTOR, DOWNLOAD_LINK_SELECTOR))
         )
     except TimeoutException:
         logger.info("SearsPartsDirect download section not found before timeout")
         return None
 
-    for anchor in anchors:
-        href = (anchor.get_attribute("href") or "").strip()
-        if not href:
-            continue
-        download_attr = (anchor.get_attribute("download") or "").strip()
-        text = (anchor.text or "").strip().lower()
-        if download_attr or "download" in text:
-            return anchor
-    return anchors[0] if anchors else None
+    download_attr = (element.get_attribute("download") or "").strip()
+    text = (element.text or "").strip().lower()
+    if download_attr or "download" in text:
+        return element
+    return None
 
 
 def _download_pdf_to_dir(download_url: str, download_dir: str, filename_hint: str, timeout: int) -> Optional[str]:
@@ -150,6 +182,8 @@ def download_manual_from_product_page(
     try:
         logger.info("Navigating SearsPartsDirect page url=%s", normalized_url)
         safe_driver_get(driver, normalized_url, timeout=navigation_timeout)
+
+        normalized_url = _maybe_navigate_to_owner_manual(driver, normalized_url, navigation_timeout)
 
         anchor = _select_download_anchor(driver, navigation_timeout)
         if not anchor:
