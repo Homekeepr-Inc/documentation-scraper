@@ -19,7 +19,7 @@
     # Health check endpoints - only accessible from Docker network
     @internal {
         client_ip 172.18.0.0/16  # Docker bridge network range
-        path /health /status
+        path /health
     }
     route @internal {
         reverse_proxy app:8000
@@ -27,8 +27,8 @@
 
     # Main routes with load balancing
     route {
-        reverse_proxy app:8000 {
-            lb_policy least_conn
+        reverse_proxy documentation-scraper-app-1:8000 documentation-scraper-app-2:8000 documentation-scraper-app-3:8000 documentation-scraper-app-4:8000 {
+            lb_policy round_robin
             health_uri /health
             health_interval 2s
             fail_duration 30s
