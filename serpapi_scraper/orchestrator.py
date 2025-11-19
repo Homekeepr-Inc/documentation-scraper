@@ -1073,7 +1073,6 @@ def download_manualslib_candidate(
         return None
 
 
-# Go through the scrapers, falling back to the next one if we fail to fetch the right manual.
 def attempt_candidate(candidate: Dict[str, Any], *, brand: str, model: str) -> Optional[PdfResult]:
     logger.info(
         "Attempting candidate url=%s score=%s source=%s",
@@ -1091,12 +1090,7 @@ def attempt_candidate(candidate: Dict[str, Any], *, brand: str, model: str) -> O
         searspartsdirect_download: Optional[SearsPartsDirectDownload] = None
         candidate_url = candidate.get("url") or ""
 
-        # Start scraping. Add new fallback scrapers here. 
         if candidate_url:
-            manualslib_download = download_manualslib_candidate(candidate_url, temp_dir)
-            if not manualslib_download and is_manualslib_product_url(candidate_url):
-                cleanup_temp_dir(temp_dir)
-                return None
             if is_searspartsdirect_manual_page(candidate_url):
                 searspartsdirect_download = download_searspartsdirect_from_page(
                     candidate_url,
@@ -1105,16 +1099,23 @@ def attempt_candidate(candidate: Dict[str, Any], *, brand: str, model: str) -> O
                 if not searspartsdirect_download:
                     cleanup_temp_dir(temp_dir)
                     return None
+            manualslib_download = download_manualslib_candidate(candidate_url, temp_dir)
+            if not manualslib_download and is_manualslib_product_url(candidate_url):
+                cleanup_temp_dir(temp_dir)
+                return None
 
-        if manualslib_download:
-            local_path = manualslib_download.pdf_path
-            file_url = manualslib_download.download_url
-            source_url = manualslib_download.manual_page_url
-        elif searspartsdirect_download:
+
+        if searspartsdirect_download:
             local_path = searspartsdirect_download.pdf_path
             file_url = searspartsdirect_download.download_url
             source_url = searspartsdirect_download.product_url
+        elif manualslib_download:
+            local_path = manualslib_download.pdf_path
+            file_url = manualslib_download.download_url
+            source_url = manualslib_download.manual_page_url
         else:
+            # Neither headless path succeeded, so fetch the candidate URL directly once.
+            # This fallback is the only network (requests library) download attempted when both scrapers fail.
             local_path = download_pdf(candidate["url"], temp_dir, brand=brand, model=model)
             if not local_path:
                 cleanup_temp_dir(temp_dir)
