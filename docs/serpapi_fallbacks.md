@@ -4,7 +4,7 @@ This guide explains how to plug an additional “progressive fallback” into `s
 
 ## 1. Understand The Existing Flow
 
-1. `fetch_manual_with_serpapi` runs the standard SerpApi queries that only target Manualslib (see `build_queries` in `serpapi_scraper/config.py`).
+1. `fetch_manual_with_serpapi` runs the ordered SerpApi query stages defined in `serpapi_scraper/config.py` (see `SCRAPER_QUERY_STAGES`).
 2. If those queries produce *zero candidates*, the orchestrator calls a fallback query provider (default: `default_fallback_query_provider`) to build the next set of search strings.
 3. Each query runs through `collect_candidates`, which filters candidate URLs. Supported HTML candidates are determined by `is_allowed_html_candidate`, and their downloads happen inside `attempt_candidate`.
 

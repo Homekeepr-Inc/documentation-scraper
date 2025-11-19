@@ -13,7 +13,7 @@ import requests
 from pypdf import PdfReader, PdfWriter
 
 from .client import SerpApiClient, SerpApiConfigError, SerpApiError, SerpApiQuotaError
-from .config import BrandConfig, build_queries, get_brand_config
+from .config import BrandConfig, build_scraper_query_plan, get_brand_config
 
 # Reuse existing scraper utilities for temp dir management and PDF validation.
 HEADLESS_UTILS_PATH = os.path.abspath(
@@ -825,6 +825,7 @@ def build_candidate_dict(
     return candidate
 
 
+# A candidate is a search result URL for a given model & appliance search query.
 def collect_candidates(
     payload: Dict[str, Any],
     config: BrandConfig,
@@ -1211,10 +1212,10 @@ def fetch_manual_with_serpapi(
 
     brand_lower = (brand or "").lower()
     config = get_brand_config(brand_lower)
-    queries = build_queries(config, model)
-    if not queries:
+    query_plan = build_scraper_query_plan(config, model)
+    if not query_plan:
         logger.warning(
-            "No SerpApi queries constructed for brand=%s model=%s", brand, model
+            "No SerpApi query stages constructed for brand=%s model=%s", brand, model
         )
         return None
 
@@ -1269,22 +1270,32 @@ def fetch_manual_with_serpapi(
 
         return None, had_candidates
 
+    stage_names = [stage.name for stage, _ in query_plan]
     logger.debug(
-        "Constructed SerpApi queries for brand=%s model=%s: %s",
+        "Constructed SerpApi query stages for brand=%s model=%s: %s",
         brand,
         model,
-        queries,
-    )
-    logger.info(
-        "Executing %d SerpApi querie(s) for brand=%s model=%s",
-        len(queries),
-        brand,
-        model,
+        stage_names,
     )
 
-    primary_result, primary_candidates_found = run_query_batch(queries, batch_label="SerpApi")
-    if primary_result:
-        return primary_result
+    primary_candidates_found = False
+    for stage, queries in query_plan:
+        if not queries:
+            continue
+        logger.info(
+            "Executing %d SerpApi querie(s) for stage=%s brand=%s model=%s",
+            len(queries),
+            stage.name,
+            brand,
+            model,
+        )
+        stage_result, stage_candidates_found = run_query_batch(
+            queries,
+            batch_label=f"{stage.name.title()}",
+        )
+        if stage_result:
+            return stage_result
+        primary_candidates_found = primary_candidates_found or stage_candidates_found
 
     fallback_reason = (
         "returned candidates but none were valid"
