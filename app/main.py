@@ -1,9 +1,9 @@
 import logging
 import sys
 import os
-import asyncio
 import tempfile
 import shutil
+from threading import Lock
 from typing import Optional
 
 from fastapi import FastAPI, HTTPException, Request, Response
@@ -59,8 +59,8 @@ if SCRAPER_SECRET == None or SCRAPER_SECRET == "":
 # Toggle to enable/disable SerpApi globally. Default to enabled.
 SERPAPI_ENABLED = os.getenv("SERPAPI_ENABLED", "true").strip().lower() not in {"false", "0", "no", ""}
 
-# Global flag to track if currently scraping
-is_scraping = False
+# Global lock to ensure only one scrape request runs at a time.
+_scrape_lock = Lock()
 
 @app.middleware("http")
 async def check_custom_header(request: Request, call_next):
@@ -87,7 +87,7 @@ def health() -> dict:
 
 @app.get("/status")
 def status():
-    if is_scraping:
+    if _scrape_lock.locked():
         return Response(status_code=503, content="busy")
     return {"status": "idle"}
 
@@ -168,7 +168,8 @@ def get_document_text(doc_id: int):
 
 @app.get("/scrape/{brand}/{model:path}")
 def scrape_brand_model(brand: str, model: str):
-    global is_scraping  # pylint: disable=global-statement
+    if not _scrape_lock.acquire(blocking=False):
+        raise HTTPException(status_code=503, detail="Busy")
     brand = brand.lower()
     supported_brands = {'ge', 'lg', 'kitchenaid', 'whirlpool', 'samsung', 'frigidaire', 'aosmith', 'rheem'}
     brand_supported = brand in supported_brands
@@ -182,7 +183,6 @@ def scrape_brand_model(brand: str, model: str):
         return FileResponse(doc[1], media_type="application/pdf")
 
     # Not cached, scrape synchronously
-    is_scraping = True
     try:
         result = None
 
@@ -290,7 +290,7 @@ def scrape_brand_model(brand: str, model: str):
             raise HTTPException(status_code=404, detail="File not stored locally")
         return FileResponse(path, media_type="application/pdf")
     finally:
-        is_scraping = False
+        _scrape_lock.release()
 
 
 @app.get("/health")
@@ -300,6 +300,6 @@ def health_check():
 
 @app.get("/status")
 def status_check():
-    if is_scraping:
+    if _scrape_lock.locked():
         raise HTTPException(status_code=503, detail="Busy")
     return {"status": "idle"}
