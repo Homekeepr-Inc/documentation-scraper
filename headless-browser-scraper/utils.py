@@ -126,7 +126,7 @@ def get_chrome_options(download_dir=None):
     options.add_argument('--disable-images')
     options.add_argument('--disable-plugins')
     options.add_argument('--disable-extensions')
-    options.add_argument('--user-agent=Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36')
+    # options.add_argument('--user-agent=Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36')
 
     if PROXY_URL:
         options.add_argument(f'--proxy-server={PROXY_URL}')

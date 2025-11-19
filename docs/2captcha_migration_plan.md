@@ -42,15 +42,15 @@ We will completely rewrite the implementation of `solve_recaptcha_if_present` to
 
 2.  **Implement 2Captcha Logic:**
     *   **Sitekey Extraction:** Extract `data-sitekey` from `.g-recaptcha` or `iframe[src*="recaptcha"]`.
-    *   **Data-S Extraction:** Check for the `data-s` attribute on the reCAPTCHA container. This is a one-time token used by some sites (like ManualsLib) for extra verification and **must** be passed to 2Captcha if present.
+    *   **Secure Token Extraction:** Check for the `data-s` / `data-stoken` attribute on the reCAPTCHA container or in `window.___grecaptcha_cfg.clients`. ManualsLib frequently hides this token, so we now walk the grecaptcha client objects before falling back to iframe params. When present it **must** be passed to 2Captcha (`data-s` payload field).
     *   **API Submission:**
-        *   Send `sitekey`, `pageurl`, `userAgent`, and `data-s` (if found).
+        *   Send `sitekey`, `pageurl`, **the exact `navigator.userAgent`** of the Selenium session, `data-s` (if found), and the current browser cookies (`driver.get_cookies()` formatted as `key=value; key2=value2`). Sharing cookies ensures the 2Captcha worker and our scraper share the same PHP session (`PHPSESSID`, `_ga`, `stcookid`, etc.).
         *   **Proxy Handling:** Check for `TWO_CAPTCHA_PROXY` environment variable.
             *   If present, parse it into `proxy` (`login:pass@ip:port`) and `proxytype` (`HTTP`).
             *   If absent, fall back to `PROXY_URL` (only if it's not a local/internal proxy).
             *   **Fail-safe:** If no valid public proxy is available, log a warning (ManualsLib will likely reject the token).
     *   **Polling:** Poll `res.php` every 5 seconds (after initial 20s delay) until success or timeout (120s).
-    *   **Token Injection:** Inject the response token into `[name="g-recaptcha-response"]`.
+    *   **Token Injection:** Inject the response token into all `[name="g-recaptcha-response"]` textareas (creating one in `#dl_captcha` if necessary) and run any `data-callback` handler so site JS caches the value before the AJAX call.
 
 3.  **Environment Configuration:**
     *   `TWO_CAPTCHA_API_KEY`: Required.
@@ -76,46 +76,21 @@ We will completely rewrite the implementation of `solve_recaptcha_if_present` to
 ## 4. Code Snippet for `ai_captcha_bridge.py` (Preview)
 
 ```python
-import time
-import requests
-import os
-from urllib.parse import urlparse
-from app.config import PROXY_URL, USER_AGENT
+payload = {
+    "key": api_key,
+    "method": "userrecaptcha",
+    "googlekey": sitekey,
+    "pageurl": driver.current_url,
+    "json": 1,
+    "userAgent": navigator_user_agent,   # driver.execute_script("return navigator.userAgent")
+    "cookies": cookie_header,           # "PHPSESSID=...; _ga=...; stcookid=..."
+}
 
-def format_proxy_for_2captcha(proxy_url):
-    """Convert http://user:pass@host:port to user:pass@host:port"""
-    try:
-        parsed = urlparse(proxy_url)
-        return f"{parsed.username}:{parsed.password}@{parsed.hostname}:{parsed.port}"
-    except Exception:
-        return None
-
-def solve_recaptcha_if_present(driver: WebDriver, ...) -> bool:
-    # ... (sitekey & data-s extraction) ...
-
-    api_key = os.getenv("TWO_CAPTCHA_API_KEY")
-    public_proxy = os.getenv("TWO_CAPTCHA_PROXY")
-    
-    payload = {
-        "key": api_key,
-        "method": "userrecaptcha",
-        "googlekey": site_key,
-        "pageurl": driver.current_url,
-        "json": 1,
-        "userAgent": USER_AGENT
-    }
-    
-    if data_s:
-        payload["data-s"] = data_s
-
-    if public_proxy:
-        payload["proxy"] = format_proxy_for_2captcha(public_proxy)
-        payload["proxytype"] = "HTTP"
-    else:
-        # Fallback or warning if using local proxy
-        pass
-
-    # ... (submit & poll) ...
+if data_s:
+    payload["data-s"] = data_s
+if two_captcha_proxy:
+    payload["proxy"] = proxy_spec
+    payload["proxytype"] = proxy_type
 ```
 
 ## References

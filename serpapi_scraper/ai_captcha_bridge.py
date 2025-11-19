@@ -23,7 +23,7 @@ from selenium.common.exceptions import (
 from selenium.webdriver.common.by import By
 from selenium.webdriver.remote.webdriver import WebDriver
 from selenium.webdriver.support import expected_conditions as EC
-from selenium.webdriver.support.ui import WebDriverWait
+from selenium.webdriver.support.wait import WebDriverWait
 
 from app.config import PROXY_URL, USER_AGENT
 
@@ -245,22 +245,130 @@ def _resolve_two_captcha_proxy(log: logging.Logger) -> Optional[ProxySettings]:
 
 def _extract_site_details(driver: WebDriver, log: logging.Logger) -> Tuple[Optional[str], Optional[str]]:
     driver.switch_to.default_content()
+    sitekey: Optional[str] = None
+    data_s: Optional[str] = None
+
+    try:
+        details = driver.execute_script(
+            """
+            return (function () {
+                const response = { sitekey: null, secureToken: null };
+                const selectors = [
+                    '#dl_captcha .g-recaptcha[data-sitekey]',
+                    '.g-recaptcha[data-sitekey]',
+                    '[data-sitekey]'
+                ];
+
+                for (const selector of selectors) {
+                    const element = document.querySelector(selector);
+                    if (!element) {
+                        continue;
+                    }
+                    const key = element.getAttribute('data-sitekey');
+                    if (key) {
+                        response.sitekey = key;
+                    }
+                    const token = element.getAttribute('data-s') || element.getAttribute('data-stoken');
+                    if (token) {
+                        response.secureToken = token;
+                        return response;
+                    }
+                    if (key) {
+                        break;
+                    }
+                }
+
+                const cfg = window.___grecaptcha_cfg;
+                if (cfg && cfg.clients) {
+                    const seen = new Set();
+                    const stack = [];
+
+                    Object.keys(cfg.clients).forEach((clientKey) => {
+                        const client = cfg.clients[clientKey];
+                        if (client && (typeof client === 'object' || typeof client === 'function')) {
+                            stack.push(client);
+                        }
+                    });
+
+                    const recordSitekey = (candidate) => {
+                        if (!response.sitekey && typeof candidate === 'string' && candidate.length >= 10) {
+                            response.sitekey = candidate;
+                        }
+                    };
+                    const recordToken = (candidate) => {
+                        if (!response.secureToken && typeof candidate === 'string' && candidate.length > 20) {
+                            response.secureToken = candidate;
+                        }
+                    };
+
+                    while (stack.length) {
+                        const node = stack.pop();
+                        if (!node || (typeof node !== 'object' && typeof node !== 'function')) {
+                            continue;
+                        }
+                        if (seen.has(node)) {
+                            continue;
+                        }
+                        seen.add(node);
+
+                        if (node.config && typeof node.config === 'object') {
+                            recordSitekey(node.config.sitekey);
+                            recordToken(node.config.stoken || node.config.s);
+                        }
+                        if (node.params && typeof node.params === 'object') {
+                            recordSitekey(node.params.sitekey);
+                            recordToken(node.params.stoken || node.params.s || node.params.token);
+                        }
+
+                        recordSitekey(node.sitekey);
+                        recordToken(node.stoken || node.s || node.token);
+
+                        if (response.sitekey && response.secureToken) {
+                            break;
+                        }
+
+                        Object.keys(node).forEach((prop) => {
+                            const value = node[prop];
+                            if (!value || (typeof value !== 'object' && typeof value !== 'function')) {
+                                return;
+                            }
+                            stack.push(value);
+                        });
+                    }
+                }
+                return response;
+            })();
+            """
+        )
+        if isinstance(details, dict):
+            sitekey = details.get("sitekey") or None
+            data_s = details.get("secureToken") or None
+    except Exception as exc:  # pylint: disable=broad-except
+        log.debug("Failed to introspect secure token via JS: %s", exc)
+
     selectors = (
         (By.CSS_SELECTOR, ".g-recaptcha[data-sitekey]"),
         (By.CSS_SELECTOR, "[data-sitekey]"),
     )
 
     for by, value in selectors:
+        if sitekey and data_s:
+            break
         try:
             elements = driver.find_elements(by, value)
         except Exception as exc:  # pylint: disable=broad-except
             log.debug("Failed querying %s for sitekey: %s", value, exc)
             continue
         for element in elements:
-            sitekey = element.get_attribute("data-sitekey")
-            if sitekey:
-                data_s = element.get_attribute("data-s") or element.get_attribute("data-stoken") or None
-                return sitekey, data_s
+            if not sitekey:
+                sitekey = element.get_attribute("data-sitekey") or sitekey
+            if not data_s and sitekey:
+                data_s = element.get_attribute("data-s") or element.get_attribute("data-stoken") or data_s
+            if sitekey and data_s:
+                break
+
+    if sitekey:
+        return sitekey, data_s
 
     try:
         frames = driver.find_elements(By.CSS_SELECTOR, "iframe[src*='recaptcha']")
@@ -275,8 +383,65 @@ def _extract_site_details(driver: WebDriver, log: logging.Logger) -> Tuple[Optio
         for key in ("k", "render"):
             value = params.get(key)
             if value and value[0]:
-                return value[0], None
-    return None, None
+                return value[0], data_s
+    return None, data_s
+
+
+def _extract_cookies(driver: WebDriver) -> Optional[str]:
+    try:
+        cookies = driver.get_cookies()
+    except Exception:
+        return None
+
+    parts = []
+    for cookie in cookies:
+        name = cookie.get("name")
+        value = cookie.get("value")
+        if not name or value is None:
+            continue
+        parts.append(f"{name}={value}")
+    if not parts:
+        return None
+    return "; ".join(parts)
+
+
+def _resolve_user_agent(driver: WebDriver, log: logging.Logger) -> str:
+    candidates = []
+    try:
+        js_ua = driver.execute_script("return navigator.userAgent || ''")
+        if isinstance(js_ua, str) and js_ua.strip():
+            candidates.append(js_ua.strip())
+    except Exception as exc:  # pylint: disable=broad-except
+        log.debug("Failed to read navigator.userAgent: %s", exc)
+
+    try:
+        caps = getattr(driver, "capabilities", None) or {}
+        chrome_opts = caps.get("goog:chromeOptions", {})
+        args = chrome_opts.get("args", []) or []
+        for arg in args:
+            if isinstance(arg, str) and arg.startswith("--user-agent="):
+                candidates.append(arg.split("=", 1)[1].strip())
+                break
+    except Exception as exc:  # pylint: disable=broad-except
+        log.debug("Failed to inspect driver capabilities for user-agent: %s", exc)
+
+    for candidate in candidates:
+        if candidate:
+            return candidate
+    return USER_AGENT
+
+
+def _is_enterprise(driver: WebDriver) -> bool:
+    try:
+        # Check for enterprise script
+        if driver.execute_script("return !!(window.grecaptcha && window.grecaptcha.enterprise)"):
+            return True
+        # Check iframe src
+        if driver.find_elements(By.CSS_SELECTOR, "iframe[src*='recaptcha/enterprise']"):
+            return True
+        return False
+    except Exception:
+        return False
 
 
 def _submit_two_captcha_request(
@@ -286,7 +451,10 @@ def _submit_two_captcha_request(
     log: logging.Logger,
     *,
     data_s: Optional[str],
+    user_agent: str,
     proxy_settings: Optional[ProxySettings],
+    cookies: Optional[str] = None,
+    enterprise: bool = False,
 ) -> Optional[str]:
     payload = {
         "key": api_key,
@@ -294,13 +462,17 @@ def _submit_two_captcha_request(
         "googlekey": site_key,
         "pageurl": page_url,
         "json": 1,
-        "userAgent": USER_AGENT,
+        "userAgent": user_agent,
     }
     if data_s:
         payload["data-s"] = data_s
     if proxy_settings:
         payload["proxy"] = proxy_settings.address
         payload["proxytype"] = proxy_settings.proxy_type
+    if cookies:
+        payload["cookies"] = cookies
+    if enterprise:
+        payload["enterprise"] = 1
 
     try:
         response = requests.post(TWO_CAPTCHA_SUBMIT_URL, data=payload, timeout=REQUEST_TIMEOUT)
@@ -419,12 +591,20 @@ def _solve_with_two_captcha(driver: WebDriver, context: str, log: logging.Logger
 
     proxy_settings = _resolve_two_captcha_proxy(log)
     proxy_desc = proxy_settings.address.split("@", 1)[-1] if proxy_settings else "none"
+    
+    cookies = _extract_cookies(driver)
+    enterprise = _is_enterprise(driver)
+    user_agent = _resolve_user_agent(driver, log)
+    
     log.info(
-        "(%s) Submitting reCAPTCHA challenge to 2Captcha (sitekey=%s proxy=%s data_s=%s)",
+        "(%s) Submitting reCAPTCHA challenge to 2Captcha (sitekey=%s proxy=%s data_s=%s cookies=%s enterprise=%s user_agent=%s)",
         context,
         site_key[:8] + "...",
         proxy_desc,
         "yes" if data_s else "no",
+        "yes" if cookies else "no",
+        "yes" if enterprise else "no",
+        user_agent,
     )
     request_id = _submit_two_captcha_request(
         site_key,
@@ -432,7 +612,10 @@ def _solve_with_two_captcha(driver: WebDriver, context: str, log: logging.Logger
         api_key,
         log,
         data_s=data_s,
+        user_agent=user_agent,
         proxy_settings=proxy_settings,
+        cookies=cookies,
+        enterprise=enterprise,
     )
     if not request_id:
         return False

@@ -8,7 +8,7 @@ This document explains how we keep Google reCAPTCHA happy while still rotating o
 2. **Per-container assignment.** `bin/start_with_proxy.py` runs before the app starts. It reads `HOSTNAME` (`app-1`, `app-2`, …), selects a proxy profile from `PROXY_PROFILE_NAMES`, and exports:
    - `PROXY_URL` → internal Squid endpoint (e.g., `http://squid-proxy-a:8888`)
    - `TWO_CAPTCHA_PROXY` / `TWO_CAPTCHA_PROXY_TYPE` → public upstream proxy (including credentials) so 2Captcha can tunnel through the same IP.
-3. **2Captcha parity.** `serpapi_scraper/ai_captcha_bridge.py` now forwards the public proxy + agent when submitting jobs. ManualsLib sees matching IPs and accepts the returned tokens.
+3. **2Captcha parity.** `serpapi_scraper/ai_captcha_bridge.py` now forwards the public proxy, the live browser cookies, and the exact user-agent when submitting jobs. ManualsLib sees matching IPs, sessions, and headers, so the returned tokens remain valid.
 
 ## Required Environment Variables
 
@@ -60,8 +60,11 @@ If you need different ratios (e.g., three containers on proxy A, one on proxy B)
 |-----------------|-------------------------------------------------------|
 | `proxytype`     | `HTTP`, `HTTPS`, `SOCKS4`, or `SOCKS5`                |
 | `proxy`         | `login:password@host:port` (password optional)        |
+| `userAgent`     | Must match `navigator.userAgent` from the Selenium session |
+| `cookies`       | Semi-colon separated cookie header (e.g., `PHPSESSID=...; _ga=...`) |
+| `data-s`        | Secure token pulled from the page when Google includes it |
 
-`start_with_proxy.py` sets `TWO_CAPTCHA_PROXY`/`TWO_CAPTCHA_PROXY_TYPE` using the chosen profile so `ai_captcha_bridge` can submit jobs with the correct metadata. Ensure the upstream proxy is reachable from the public internet; 2Captcha workers must be able to connect to it directly.
+`start_with_proxy.py` sets `TWO_CAPTCHA_PROXY`/`TWO_CAPTCHA_PROXY_TYPE` using the chosen profile so `ai_captcha_bridge` can submit jobs with the correct metadata. The bridge also pulls cookies + UA directly from the driver before each submission. Ensure the upstream proxy is reachable from the public internet; 2Captcha workers must be able to connect to it directly.
 
 ## Operational Notes
 
