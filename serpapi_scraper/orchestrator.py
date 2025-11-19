@@ -673,6 +673,11 @@ def evaluate_pdf_candidate(
     language_hits = features.get("language_hits", {})
     english_hits = language_hits.get("english", 0)
     spanish_hits = language_hits.get("spanish", 0)
+    total_language_hits = english_hits + spanish_hits
+    english_ratio = (
+        english_hits / total_language_hits if total_language_hits else 0.0
+    )
+    # Only reject for Spanish dominance when English is truly scarce (<20%) so mixed manuals remain eligible.
     # Heuristic to avoid counting promo / non owners-manual PDFs incorrectly.
     features["too_short_for_owner"] = page_count < 4
 
