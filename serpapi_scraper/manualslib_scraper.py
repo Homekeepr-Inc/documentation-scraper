@@ -736,11 +736,7 @@ def download_manual_from_product_page(
 
     # reCAPTCHA gets upset if we set the user-agent manually, since it knows the real user-agent, somehow.
     # This results in us using the HeadlessChrome UA, but only Cloudflare cares about that one.
-    chrome_options = get_chrome_options(download_dir=download_dir)
-    chrome_options.arguments = [
-        arg for arg in getattr(chrome_options, "arguments", [])
-        if not arg.startswith("--user-agent=")
-    ]
+    chrome_options = get_chrome_options(download_dir=download_dir, user_agent=None)
     driver = create_chrome_driver(options=chrome_options, download_dir=download_dir)
 
     try:

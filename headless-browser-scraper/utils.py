@@ -29,6 +29,12 @@ import shutil
 # Import config for BLOB_ROOT and PROXY_URL
 from app.config import DEFAULT_BLOB_ROOT, PROXY_URL
 
+DEFAULT_DESKTOP_USER_AGENT = (
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+    "AppleWebKit/537.36 (KHTML, like Gecko) "
+    "Chrome/142.0.0.0 Safari/537.3"
+)
+
 def _detect_chrome_binary() -> Optional[str]:
     """
     Attempt to locate a Chrome executable that Selenium can launch.
@@ -106,12 +112,13 @@ def _detect_chromedriver_major_version(driver_path: Optional[str]) -> Optional[i
         return None
 
 
-def get_chrome_options(download_dir=None):
+def get_chrome_options(download_dir=None, user_agent: Optional[str] = DEFAULT_DESKTOP_USER_AGENT):
     """
     Build ChromeOptions with common scraper defaults and optional download directory.
 
     Args:
         download_dir (str, optional): Directory where Chrome should store downloads.
+        user_agent (str, optional): User-Agent string to expose; set to None to leave Chrome's default.
 
     Returns:
         ChromeOptions: Configured options instance.
@@ -127,7 +134,8 @@ def get_chrome_options(download_dir=None):
     options.add_argument('--disable-plugins')
     options.add_argument('--disable-extensions')
     # NEVER use the HeadlessChrome user-agent. Cloudflare will force a captcha on us.
-    options.add_argument('--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/142.0.0.0 Safari/537.3')
+    if user_agent:
+        options.add_argument(f'--user-agent={user_agent}')
 
     if PROXY_URL:
         options.add_argument(f'--proxy-server={PROXY_URL}')
