@@ -14,6 +14,13 @@ from starlette.responses import JSONResponse
 from .db import init_db, fetch_document, search_documents
 from .logging_config import setup_logging
 
+# Filter out /health requests from uvicorn access logs
+class EndpointFilter(logging.Filter):
+    def filter(self, record: logging.LogRecord) -> bool:
+        return record.getMessage().find("GET /health") == -1
+
+logging.getLogger("uvicorn.access").addFilter(EndpointFilter())
+
 # Add path for headless scraper
 sys.path.append(os.path.join(os.path.dirname(__file__), '..', 'headless-browser-scraper'))
 from ge.ge_headless_scraper import scrape_ge_manual, ingest_ge_manual
