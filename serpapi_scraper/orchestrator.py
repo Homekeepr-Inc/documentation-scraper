@@ -6,7 +6,7 @@ import re
 import sys
 import tempfile
 from functools import lru_cache
-from typing import Any, Dict, Iterable, List, Optional, Tuple
+from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple
 from urllib.parse import unquote, urlsplit
 
 import requests
@@ -33,9 +33,15 @@ from .manualslib_scraper import (
     download_manual_from_product_page,
     is_manualslib_product_url,
 )
+from .searspartsdirect_scraper import (
+    SearsPartsDirectDownload,
+    download_manual_from_product_page as download_searspartsdirect_from_page,
+    is_searspartsdirect_manual_page,
+)
 from app.config import DOWNLOAD_TIMEOUT, USER_AGENT, PROXY_URL
 
 PdfResult = Dict[str, Any]
+FallbackQueryProvider = Callable[[BrandConfig, str], List[str]]
 
 logger = logging.getLogger("serpapi.orchestrator")
 
@@ -197,6 +203,24 @@ BROWSER_SEC_CH_HEADERS = {
     "sec-ch-ua-mobile": "?0",
     "sec-ch-ua-platform": '"macOS"',
 }
+
+
+def default_fallback_query_provider(config: BrandConfig, model: str) -> List[str]:
+    """Default fallback queries (SearsPartsDirect) used when primary searches return nothing."""
+
+    normalized_model = model.strip()
+    manual_phrase = "owner's manual"
+    subject_parts = []
+    if config.display_name:
+        subject_parts.append(config.display_name.strip())
+    if normalized_model:
+        subject_parts.append(normalized_model)
+    subject = " ".join(part for part in subject_parts if part)
+    if subject:
+        query = f"{subject} {manual_phrase} site:searspartsdirect.com"
+    else:
+        query = f"{manual_phrase} site:searspartsdirect.com"
+    return [query]
 
 # Gate the Gemini flow behind env flags so production defaults stay unchanged.
 USE_GEMINI_VALIDATION = _env_flag("SERPAPI_USE_GEMINI_VALIDATION", False)
@@ -418,6 +442,10 @@ def detect_doc_type(title: str, url: str) -> str:
 def is_probable_pdf(url: str) -> bool:
     sanitized = url.lower().split("?", 1)[0]
     return sanitized.endswith(".pdf")
+
+
+def is_allowed_html_candidate(url: str) -> bool:
+    return is_manualslib_product_url(url) or is_searspartsdirect_manual_page(url)
 
 
 def derive_filename(url: str, brand: str, model: str) -> str:
@@ -670,13 +698,13 @@ def evaluate_pdf_candidate(
     manual_tokens = features["manual_tokens"]
     marketing_hits = features["marketing_hits"]
     page_count = features["page_count"]
-    language_hits = features.get("language_hits", {})
-    english_hits = language_hits.get("english", 0)
-    spanish_hits = language_hits.get("spanish", 0)
-    total_language_hits = english_hits + spanish_hits
-    english_ratio = (
-        english_hits / total_language_hits if total_language_hits else 0.0
-    )
+    # language_hits = features.get("language_hits", {})
+    # english_hits = language_hits.get("english", 0)
+    # spanish_hits = language_hits.get("spanish", 0)
+    # total_language_hits = english_hits + spanish_hits
+    # english_ratio = (
+    #     english_hits / total_language_hits if total_language_hits else 0.0
+    # )
     # Only reject for Spanish dominance when English is truly scarce (<20%) so mixed manuals remain eligible.
     # Heuristic to avoid counting promo / non owners-manual PDFs incorrectly.
     features["too_short_for_owner"] = page_count < 4
@@ -726,12 +754,13 @@ def evaluate_pdf_candidate(
     elif page_count <= 2 and keyword_hits.get("owner", 0) == 0:
         accept = False
         reason = "insufficient_pages"
-    elif english_hits == 0 and spanish_hits > 0:
-        accept = False
-        reason = "non_english_content"
-    elif spanish_hits >= max(3, english_hits * 2):
-        accept = False
-        reason = "non_english_content"
+    # removed because it has a bad hit rate
+    # elif english_hits == 0 and spanish_hits > 0:
+    #     accept = False
+    #     reason = "non_english_content"
+    # elif english_ratio < 0.2 and spanish_hits >= max(3, english_hits * 2):
+    #     accept = False
+    #     reason = "non_english_content"
 
     if (
         not accept
@@ -815,7 +844,8 @@ def collect_candidates(
         url = result.get("link") or result.get("redirect_link")
         if not url or url in seen_urls:
             continue
-        if not is_probable_pdf(url) and not is_manualslib_product_url(url):
+        if not is_probable_pdf(url) and not is_allowed_html_candidate(url):
+            logger.debug("Skipping candidate due to non-supported HTML url=%s", url)
             continue
         if is_disallowed_locale_url(url):
             logger.debug("Skipping candidate due to disallowed locale url=%s", url)
@@ -1042,6 +1072,7 @@ def download_manualslib_candidate(
         return None
 
 
+# Go through the scrapers, falling back to the next one if we fail to fetch the right manual.
 def attempt_candidate(candidate: Dict[str, Any], *, brand: str, model: str) -> Optional[PdfResult]:
     logger.info(
         "Attempting candidate url=%s score=%s source=%s",
@@ -1056,18 +1087,32 @@ def attempt_candidate(candidate: Dict[str, Any], *, brand: str, model: str) -> O
     temp_dir = create_temp_download_dir()
     try:
         manualslib_download: Optional[ManualslibDownload] = None
+        searspartsdirect_download: Optional[SearsPartsDirectDownload] = None
         candidate_url = candidate.get("url") or ""
 
+        # Start scraping. Add new fallback scrapers here. 
         if candidate_url:
             manualslib_download = download_manualslib_candidate(candidate_url, temp_dir)
             if not manualslib_download and is_manualslib_product_url(candidate_url):
                 cleanup_temp_dir(temp_dir)
                 return None
+            if is_searspartsdirect_manual_page(candidate_url):
+                searspartsdirect_download = download_searspartsdirect_from_page(
+                    candidate_url,
+                    download_dir=temp_dir,
+                )
+                if not searspartsdirect_download:
+                    cleanup_temp_dir(temp_dir)
+                    return None
 
         if manualslib_download:
             local_path = manualslib_download.pdf_path
             file_url = manualslib_download.download_url
             source_url = manualslib_download.manual_page_url
+        elif searspartsdirect_download:
+            local_path = searspartsdirect_download.pdf_path
+            file_url = searspartsdirect_download.download_url
+            source_url = searspartsdirect_download.product_url
         else:
             local_path = download_pdf(candidate["url"], temp_dir, brand=brand, model=model)
             if not local_path:
@@ -1119,6 +1164,13 @@ def attempt_candidate(candidate: Dict[str, Any], *, brand: str, model: str) -> O
                     "manualslib_download_url": manualslib_download.download_url,
                 }
             )
+        if searspartsdirect_download:
+            result["serpapi_metadata"].update(
+                {
+                    "searspartsdirect_product_url": searspartsdirect_download.product_url,
+                    "searspartsdirect_download_url": searspartsdirect_download.download_url,
+                }
+            )
         logger.info(
             "Validation passed for candidate url=%s doc_type=%s score=%s",
             candidate.get("url"),
@@ -1141,12 +1193,14 @@ def fetch_manual_with_serpapi(
     model: str,
     *,
     client: Optional[SerpApiClient] = None,
+    fallback_query_provider: Optional[FallbackQueryProvider] = None,
 ) -> Optional[PdfResult]:
     """
     Attempt to fetch a manual via SerpApi for the provided brand/model.
 
     Returns a result dict compatible with validate_and_ingest_manual or None if no
-    suitable PDF was found.
+    suitable PDF was found. Provide fallback_query_provider to inject additional
+    progressive search strings when the primary set yields no candidates.
     """
     logger.info("Starting SerpApi fetch brand=%s model=%s", brand, model)
     try:
@@ -1165,6 +1219,56 @@ def fetch_manual_with_serpapi(
         return None
 
     seen_urls: set = set()
+    fallback_provider = fallback_query_provider or default_fallback_query_provider
+
+    def run_query_batch(
+        queries_to_try: List[str],
+        *,
+        batch_label: str,
+    ) -> Tuple[Optional[PdfResult], bool]:
+        had_candidates = False
+        if not queries_to_try:
+            return None, False
+
+        for index, query in enumerate(queries_to_try, start=1):
+            logger.info("%s query %d/%d: %s", batch_label, index, len(queries_to_try), query)
+            try:
+                payload = serpapi_client.search(query)
+            except SerpApiQuotaError:
+                logger.error("SerpApi quota exceeded during query=%s", query)
+                raise
+            except SerpApiError as exc:
+                logger.warning("SerpApi search error for query=%s: %s", query, exc)
+                continue
+
+            candidates = collect_candidates(payload, config, model, query, seen_urls)
+            if not candidates:
+                logger.info("No PDF candidates returned for query=%s", query)
+                continue
+
+            had_candidates = True
+            candidates.sort(key=lambda item: item.get("score", 0), reverse=True)
+            for candidate in candidates[:5]:
+                result = attempt_candidate(candidate, brand=brand_lower, model=model)
+                if result:
+                    logger.info(
+                        "Candidate accepted url=%s brand=%s model=%s (batch=%s)",
+                        candidate.get("url"),
+                        brand,
+                        model,
+                        batch_label,
+                    )
+                    return result, True
+                logger.info(
+                    "Candidate rejected after validation url=%s brand=%s model=%s (batch=%s)",
+                    candidate.get("url"),
+                    brand,
+                    model,
+                    batch_label,
+                )
+
+        return None, had_candidates
+
     logger.debug(
         "Constructed SerpApi queries for brand=%s model=%s: %s",
         brand,
@@ -1178,42 +1282,49 @@ def fetch_manual_with_serpapi(
         model,
     )
 
-    for index, query in enumerate(queries, start=1):
-        logger.info("SerpApi query %d/%d: %s", index, len(queries), query)
-        try:
-            payload = serpapi_client.search(query)
-        except SerpApiQuotaError:
-            logger.error("SerpApi quota exceeded during query=%s", query)
-            raise
-        except SerpApiError as exc:
-            logger.warning("SerpApi search error for query=%s: %s", query, exc)
-            continue
+    primary_result, primary_candidates_found = run_query_batch(queries, batch_label="SerpApi")
+    if primary_result:
+        return primary_result
 
-        candidates = collect_candidates(payload, config, model, query, seen_urls)
-        if not candidates:
-            logger.info("No PDF candidates returned for query=%s", query)
-            continue
+    fallback_reason = (
+        "returned candidates but none were valid"
+        if primary_candidates_found
+        else "returned no candidates"
+    )
+    fallback_queries = fallback_provider(config, model) if fallback_provider else []
+    if not fallback_queries:
+        logger.info(
+            "Primary SerpApi search %s and no fallback queries were provided for brand=%s model=%s",
+            fallback_reason,
+            brand,
+            model,
+        )
+        return None
 
-        # Sort by descending score to try the most promising PDFs first.
-        candidates.sort(key=lambda item: item.get("score", 0), reverse=True)
-        for candidate in candidates[:5]:
-            result = attempt_candidate(candidate, brand=brand_lower, model=model)
-            if result:
-                logger.info(
-                    "Candidate accepted url=%s brand=%s model=%s",
-                    candidate.get("url"),
-                    brand,
-                    model,
-                )
-                return result
-            logger.info(
-                "Candidate rejected after validation url=%s brand=%s model=%s",
-                candidate.get("url"),
-                brand,
-                model,
-            )
+    logger.info(
+        "Primary SerpApi search %s; executing %d fallback querie(s)",
+        fallback_reason,
+        len(fallback_queries),
+    )
+    fallback_result, fallback_candidates_found = run_query_batch(
+        fallback_queries,
+        batch_label="Fallback",
+    )
+    if fallback_result:
+        return fallback_result
 
-    logger.info("No valid SerpApi manual found for brand=%s model=%s", brand, model)
+    if fallback_candidates_found:
+        logger.info(
+            "Fallback SerpApi queries found candidates but none were valid for brand=%s model=%s",
+            brand,
+            model,
+        )
+    else:
+        logger.info(
+            "Fallback SerpApi queries returned no candidates for brand=%s model=%s",
+            brand,
+            model,
+        )
     return None
 
 

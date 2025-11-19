@@ -51,6 +51,7 @@ PRODUCT_PATH_PREFIX = "/products/"
 MANUAL_LINK_SELECTOR = "h3.search_h3 a[href*='/manual/']"
 # THe download button on the page before the actual download. ManualsLib is annoying.
 PRE_DOWNLOAD_BUTTON_SELECTOR = "download-manual-btn"
+# The actual download button ID for ManualsLib.
 DOWNLOAD_BUTTON_SELECTOR = "get-manual-button"
 DOWNLOAD_LINK_SELECTOR = "a.download-url"
 VIEW_LINK_SELECTOR = "a.view-url"
@@ -117,7 +118,8 @@ def _wait_for_manual_link(driver, timeout: int) -> Optional[str]:
 
     for element in elements:
         href = element.get_attribute("href") or ""
-        if href:
+        if href and "Installation" not in element.text:
+            print("element.text %s", element.text)
             return href
     return None
 
