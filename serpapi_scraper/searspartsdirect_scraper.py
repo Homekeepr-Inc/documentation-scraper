@@ -4,7 +4,7 @@ Headless scraper for retrieving manuals from SearsPartsDirect.
 The flow mirrors the Manualslib scraper but is far simpler:
     1. Load the SearsPartsDirect product/manual page.
     2. Locate the download guide section and its anchor.
-    3. Click the anchor so Chrome downloads the PDF into the provided directory.
+    3. Resolve the anchor href and download the PDF via requests.
 """
 
 from __future__ import annotations
@@ -13,16 +13,12 @@ import contextlib
 import logging
 import os
 import sys
-import time
 from dataclasses import dataclass
 from typing import Optional
 from urllib.parse import urljoin, urlparse
 
-from selenium.common.exceptions import (
-    ElementClickInterceptedException,
-    ElementNotInteractableException,
-    TimeoutException,
-)
+import requests
+from selenium.common.exceptions import TimeoutException
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.support.ui import WebDriverWait
@@ -38,7 +34,6 @@ from utils import (  # type: ignore  # pylint: disable=import-error
     create_chrome_driver,
     get_chrome_options,
     safe_driver_get,
-    wait_for_download,
 )
 
 logger = logging.getLogger("serpapi.searspartsdirect")
@@ -57,11 +52,6 @@ class SearsPartsDirectDownload:
     pdf_path: str
 
 
-def _is_probable_pdf(url: str) -> bool:
-    cleaned = (url or "").lower().split("?", 1)[0]
-    return cleaned.endswith(".pdf")
-
-
 def is_searspartsdirect_manual_page(url: str) -> bool:
     """Return True when the URL is an HTML SearsPartsDirect manual/product page."""
 
@@ -75,7 +65,7 @@ def is_searspartsdirect_manual_page(url: str) -> bool:
     if not host.endswith("searspartsdirect.com"):
         return False
     path = (parsed.path or "").lower()
-    return not _is_probable_pdf(path)
+    return not path.endswith(".pdf")
 
 
 def _select_download_anchor(driver, timeout: int):
@@ -96,31 +86,43 @@ def _select_download_anchor(driver, timeout: int):
             continue
         download_attr = (anchor.get_attribute("download") or "").strip()
         text = (anchor.text or "").strip().lower()
-        if download_attr or "download" in text or href.lower().endswith(".pdf"):
+        if download_attr or "download" in text:
             return anchor
     return anchors[0] if anchors else None
 
 
-def _click_anchor(driver, anchor) -> bool:
-    """Attempt to click an anchor, scrolling it into view first."""
+def _download_pdf_to_dir(download_url: str, download_dir: str, filename_hint: str, timeout: int) -> Optional[str]:
+    """Download the PDF with requests into the provided directory."""
 
-    for attempt in range(1, 4):
-        try:
-            driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", anchor)
-            time.sleep(0.3)
-            anchor.click()
-            return True
-        except (ElementClickInterceptedException, ElementNotInteractableException) as exc:
-            logger.debug("Attempt %s to click SearsPartsDirect anchor failed: %s", attempt, exc)
-            time.sleep(0.4)
+    filename = filename_hint or "searspartsdirect-manual.pdf"
+    if not filename.lower().endswith(".pdf"):
+        filename = f"{filename}.pdf"
+
+    target_path = os.path.join(download_dir, filename)
+    base, ext = os.path.splitext(target_path)
+    counter = 1
+    while os.path.exists(target_path):
+        target_path = f"{base}-{counter}{ext or '.pdf'}"
+        counter += 1
+
+    logger.info("Downloading SearsPartsDirect PDF directly url=%s path=%s", download_url, target_path)
+    try:
+        response = requests.get(download_url, timeout=timeout, stream=True)
+        response.raise_for_status()
+    except requests.RequestException as exc:
+        logger.info("SearsPartsDirect PDF request failed url=%s error=%s", download_url, exc)
+        return None
 
     try:
-        driver.execute_script("arguments[0].click();", anchor)
-        logger.debug("Clicked SearsPartsDirect anchor via JS fallback")
-        return True
-    except Exception as exc:  # pylint: disable=broad-except
-        logger.warning("Failed to click SearsPartsDirect anchor via JS fallback: %s", exc)
-        return False
+        with open(target_path, "wb") as pdf_file:
+            for chunk in response.iter_content(chunk_size=8192):
+                if chunk:
+                    pdf_file.write(chunk)
+    except OSError as exc:
+        logger.info("SearsPartsDirect file write failed path=%s error=%s", target_path, exc)
+        return None
+
+    return target_path
 
 
 def download_manual_from_product_page(
@@ -141,7 +143,6 @@ def download_manual_from_product_page(
         normalized_url = f"https://{normalized_url.lstrip('/')}"
 
     os.makedirs(download_dir, exist_ok=True)
-    initial_snapshot = set(os.listdir(download_dir))
 
     chrome_options = get_chrome_options(download_dir=download_dir)
     driver = create_chrome_driver(options=chrome_options, download_dir=download_dir)
@@ -158,19 +159,10 @@ def download_manual_from_product_page(
         raw_href = anchor.get_attribute("href") or ""
         download_url = urljoin(normalized_url, raw_href)
 
-        if not _click_anchor(driver, anchor):
-            logger.info("Unable to click SearsPartsDirect download link url=%s", normalized_url)
-            return None
-
-        pdf_path = wait_for_download(
-            download_dir,
-            timeout=download_timeout,
-            initial_files=initial_snapshot,
-            expected_extensions=(".pdf",),
-            logger=lambda message: logger.debug("SearsPartsDirect download: %s", message),
-        )
+        filename_hint = os.path.basename(urlparse(download_url).path) or "searspartsdirect-manual.pdf"
+        pdf_path = _download_pdf_to_dir(download_url, download_dir, filename_hint, download_timeout)
         if not pdf_path:
-            logger.info("SearsPartsDirect download timed out url=%s", normalized_url)
+            logger.info("SearsPartsDirect PDF download failed url=%s download_url=%s", normalized_url, download_url)
             return None
 
         return SearsPartsDirectDownload(
