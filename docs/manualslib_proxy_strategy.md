@@ -41,16 +41,16 @@ Adjust or add additional profiles as needed (e.g., `proxy_c`). When adding a new
 
 ## How Assignment Works
 
-- Compose (or Swarm) names containers `app-1`, `app-2`, … as we scale replicas.
-- `start_with_proxy.py` extracts the numeric suffix, converts it to zero-based index, and selects `profiles[index % len(profiles)]`.
-- Example with `PROXY_PROFILE_NAMES=proxy_a,proxy_b`:
-  - `app-1` → `proxy_a`
-  - `app-2` → `proxy_b`
-  - `app-3` → `proxy_a`
-  - `app-4` → `proxy_b`
-- The script logs `[proxy-bootstrap] hostname=... profile=...` without exposing credentials.
+Compose (or Swarm) automatically names scaled containers `app-1`, `app-2`, `app-3`, and so on. `bin/start_with_proxy.py` grabs the number at the end of the hostname, turns it into a zero-based index, and assigns `profiles[index % len(profiles)]` from `PROXY_PROFILE_NAMES`. With the default `proxy_a,proxy_b` list the pattern becomes:
 
-If you need different ratios (e.g., three containers on proxy A, one on proxy B), replicate the profile name in the list: `PROXY_PROFILE_NAMES=proxy_a,proxy_a,proxy_a,proxy_b`.
+- `app-1` → `proxy_a`
+- `app-2` → `proxy_b`
+- `app-3` → `proxy_a`
+- `app-4` → `proxy_b`
+
+The script emits `[proxy-bootstrap] hostname=... profile=...` for traceability without leaking credentials.
+
+To skew the ratio, just repeat profile names. Example: `PROXY_PROFILE_NAMES=proxy_a,proxy_a,proxy_a,proxy_b` gives three containers on proxy A for every one on proxy B.
 
 ## 2Captcha Requirements
 
