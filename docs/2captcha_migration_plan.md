@@ -7,7 +7,7 @@ Maintaining the current custom AI captcha solver has shown to be very time consu
 ## 1. Analysis of Current Implementation
 *   **Entry Point:** `serpapi_scraper/orchestrator.py` uses `serpapi_scraper/manualslib_scraper.py` to download manuals.
 *   **Captcha Handling:** `manualslib_scraper.py` imports `detect_recaptcha` and `solve_recaptcha_if_present` from `serpapi_scraper/ai_captcha_bridge.py`.
-*   **Current Solver:** `ai_captcha_bridge.py` currently loads and uses `serpapi_scraper/ai-captcha-bypass/main.py` to visually solve the captcha using Selenium and AI models (OpenAI/Gemini).
+*   **Current Solver:** `ai_captcha_bridge.py` previously loaded `serpapi_scraper/ai-captcha-bypass/main.py` to visually solve the captcha using Selenium and AI models (OpenAI/Gemini). That workflow is now deprecated in favor of the 2Captcha integration described below; the legacy module remains only for reference and can be removed once `CAPTCHA_SOLVER=legacy` is no longer needed.
 *   **Integration Point:** The best place to swap the implementation is `serpapi_scraper/ai_captcha_bridge.py`. This preserves the interface used by `manualslib_scraper.py` (`detect_recaptcha`, `solve_recaptcha_if_present`) while changing the underlying solving mechanism.
 
 ## 2. Proposed Changes
