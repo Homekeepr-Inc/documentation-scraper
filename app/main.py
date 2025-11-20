@@ -1,14 +1,14 @@
+import asyncio
 import logging
 import sys
 import os
-import tempfile
 import shutil
-from threading import Lock
 from typing import Optional
 
 from fastapi import FastAPI, HTTPException, Request, Response
 from fastapi.responses import FileResponse, PlainTextResponse, HTMLResponse
 from fastapi.templating import Jinja2Templates
+from fastapi.concurrency import run_in_threadpool
 from starlette.responses import JSONResponse
 
 from .db import init_db, fetch_document, search_documents
@@ -59,8 +59,18 @@ if SCRAPER_SECRET == None or SCRAPER_SECRET == "":
 # Toggle to enable/disable SerpApi globally. Default to enabled.
 SERPAPI_ENABLED = os.getenv("SERPAPI_ENABLED", "true").strip().lower() not in {"false", "0", "no", ""}
 
-# Global lock to ensure only one scrape request runs at a time.
-_scrape_lock = Lock()
+# Global lock to ensure only one scrape request runs at a time without blocking worker threads.
+_scrape_lock = asyncio.Lock()
+SUPPORTED_BRANDS = {
+    "ge",
+    "lg",
+    "kitchenaid",
+    "whirlpool",
+    "samsung",
+    "frigidaire",
+    "aosmith",
+    "rheem",
+}
 
 @app.middleware("http")
 async def check_custom_header(request: Request, call_next):
@@ -166,131 +176,135 @@ def get_document_text(doc_id: int):
     raise HTTPException(status_code=404, detail="Text not available")
 
 
-@app.get("/scrape/{brand}/{model:path}")
-def scrape_brand_model(brand: str, model: str):
-    if not _scrape_lock.acquire(blocking=True):
-        raise HTTPException(status_code=503, detail="Busy")
+def _scrape_and_get_local_path(brand: str, model: str) -> str:
+    """Runs the blocking scrape + ingest workflow and returns the local file path."""
     brand = brand.lower()
-    supported_brands = {'ge', 'lg', 'kitchenaid', 'whirlpool', 'samsung', 'frigidaire', 'aosmith', 'rheem'}
-    brand_supported = brand in supported_brands
-
+    brand_supported = brand in SUPPORTED_BRANDS
     normalized_model = normalize_model(model)
 
-    # Check DB for existing document
     from .db import get_db
-    doc = get_db().execute("SELECT id, local_path FROM documents WHERE brand = ? AND model_number = ? AND local_path IS NOT NULL LIMIT 1", (brand, normalized_model)).fetchone()
+
+    doc = (
+        get_db()
+        .execute(
+            "SELECT id, local_path FROM documents WHERE brand = ? AND model_number = ? AND local_path IS NOT NULL LIMIT 1",
+            (brand, normalized_model),
+        )
+        .fetchone()
+    )
     if doc:
-        return FileResponse(doc[1], media_type="application/pdf")
+        return doc[1]
 
-    # Not cached, scrape synchronously
-    try:
-        result = None
+    result = None
 
-        if SERPAPI_ENABLED:
+    if SERPAPI_ENABLED:
+        try:
+            serpapi_result = fetch_manual_with_serpapi(brand, model)
+            if serpapi_result:
+                result = serpapi_result
+        except SerpApiQuotaError as exc:
+            logger.warning(
+                "SerpApi quota exceeded for brand=%s model=%s: %s",
+                brand,
+                model,
+                exc,
+            )
+        except SerpApiError as exc:
+            logger.warning(
+                "SerpApi error for brand=%s model=%s: %s",
+                brand,
+                model,
+                exc,
+            )
+
+    if result is None and brand_supported:
+        if brand == "ge":
+            result = scrape_ge_manual(model)
+        elif brand == "lg":
+            result = scrape_lg_manual(model)
+        elif brand == "kitchenaid":
+            result = scrape_kitchenaid_manual(model)
+        elif brand == "whirlpool":
+            result = scrape_whirlpool_manual(model)
+        elif brand == "samsung":
+            result = scrape_samsung_manual(model)
+        elif brand == "frigidaire":
+            result = scrape_frigidaire_manual(model)
+        elif brand == "aosmith":
+            result = scrape_aosmith_manual(model)
+        elif brand == "rheem":
+            result = scrape_rheem_manual(model)
+
+    if not result:
+        raise HTTPException(status_code=404, detail="No manual found")
+
+    if isinstance(result, list):
+        result = result[0]
+
+    if brand_supported:
+        if brand == "ge":
+            ingest_func = ingest_ge_manual
+        elif brand == "lg":
+            ingest_func = ingest_lg_manual
+        elif brand == "kitchenaid":
+            ingest_func = ingest_kitchenaid_manual
+        elif brand == "whirlpool":
+            ingest_func = ingest_whirlpool_manual
+        elif brand == "samsung":
+            ingest_func = ingest_samsung_manual
+        elif brand == "frigidaire":
+            ingest_func = ingest_frigidaire_manual
+        elif brand == "aosmith":
+            ingest_func = ingest_aosmith_manual
+        elif brand == "rheem":
+            ingest_func = ingest_rheem_manual
+
+        ingest_result = ingest_func(result)
+    else:
+        ingest_result = validate_and_ingest_manual(result)
+
+    if not ingest_result or not ingest_result.id:
+        doc = (
+            get_db()
+            .execute("SELECT id FROM documents WHERE file_url = ?", (result["file_url"],))
+            .fetchone()
+        )
+        if doc:
+            doc_id = doc[0]
+        else:
+            raise HTTPException(status_code=500, detail="Failed to ingest")
+    else:
+        doc_id = ingest_result.id
+
+    if result and result.get("local_path"):
+        temp_dir = os.path.dirname(result["local_path"])
+        scraper_temp_dir = os.path.abspath(
+            os.path.join(os.path.dirname(__file__), "..", "headless-browser-scraper", "temp")
+        )
+        temp_dir = os.path.abspath(temp_dir)
+        if temp_dir and os.path.exists(temp_dir):
             try:
-                serpapi_result = fetch_manual_with_serpapi(brand, model)
-                if serpapi_result:
-                    result = serpapi_result
-            except SerpApiQuotaError as exc:
-                # Log and fall back to brand-specific scraper
-                logger.warning(
-                    "SerpApi quota exceeded for brand=%s model=%s: %s",
-                    brand,
-                    model,
-                    exc,
-                )
-            except SerpApiError as exc:
-                # Log and fall back silently
-                logger.warning(
-                    "SerpApi error for brand=%s model=%s: %s",
-                    brand,
-                    model,
-                    exc,
-                )
+                common = os.path.commonpath([scraper_temp_dir, temp_dir])
+                if common == scraper_temp_dir:
+                    shutil.rmtree(temp_dir)
+                    print(f"Cleaned up temp dir: {temp_dir}")
+            except (ValueError, OSError) as e:
+                print(f"Error cleaning temp dir {temp_dir}: {e}")
 
-        if result is None and brand_supported:
-            if brand == 'ge':
-                result = scrape_ge_manual(model)
-            elif brand == 'lg':
-                result = scrape_lg_manual(model)
-            elif brand == 'kitchenaid':
-                result = scrape_kitchenaid_manual(model)
-            elif brand == 'whirlpool':
-                result = scrape_whirlpool_manual(model)
-            elif brand == 'samsung':
-                result = scrape_samsung_manual(model)
-            elif brand == 'frigidaire':
-                result = scrape_frigidaire_manual(model)
-            elif brand == 'aosmith':
-                result = scrape_aosmith_manual(model)
-            elif brand == 'rheem':
-                result = scrape_rheem_manual(model)
+    doc = fetch_document(doc_id)
+    if not doc:
+        raise HTTPException(status_code=404, detail="Document not found")
+    path = doc.get("local_path")
+    if not path:
+        raise HTTPException(status_code=404, detail="File not stored locally")
+    return path
 
-        if not result:
-            raise HTTPException(status_code=404, detail="No manual found")
-    
-        # Handle case where result is a list (take first result)
-        if isinstance(result, list):
-            result = result[0]
 
-        if brand_supported:
-            # Select ingest function based on brand
-            if brand == 'ge':
-                ingest_func = ingest_ge_manual
-            elif brand == 'lg':
-                ingest_func = ingest_lg_manual
-            elif brand == 'kitchenaid':
-                ingest_func = ingest_kitchenaid_manual
-            elif brand == 'whirlpool':
-                ingest_func = ingest_whirlpool_manual
-            elif brand == 'samsung':
-                ingest_func = ingest_samsung_manual
-            elif brand == 'frigidaire':
-                ingest_func = ingest_frigidaire_manual
-            elif brand == 'aosmith':
-                ingest_func = ingest_aosmith_manual
-            elif brand == 'rheem':
-                ingest_func = ingest_rheem_manual
-    
-            ingest_result = ingest_func(result)
-        else:
-            ingest_result = validate_and_ingest_manual(result)
-
-        if not ingest_result or not ingest_result.id:
-            # Check if already exists
-            doc = get_db().execute("SELECT id FROM documents WHERE file_url = ?", (result['file_url'],)).fetchone()
-            if doc:
-                doc_id = doc[0]
-            else:
-                raise HTTPException(status_code=500, detail="Failed to ingest")
-        else:
-            doc_id = ingest_result.id
-    
-        # Clean up temp directory if it exists
-        if result and result.get('local_path'):
-            temp_dir = os.path.dirname(result['local_path'])
-            scraper_temp_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'headless-browser-scraper', 'temp'))
-            temp_dir = os.path.abspath(temp_dir)
-            if temp_dir and os.path.exists(temp_dir):
-                try:
-                    # Use commonpath for reliable subdirectory check
-                    common = os.path.commonpath([scraper_temp_dir, temp_dir])
-                    if common == scraper_temp_dir:
-                        shutil.rmtree(temp_dir)
-                        print(f"Cleaned up temp dir: {temp_dir}")
-                except (ValueError, OSError) as e:
-                    print(f"Error cleaning temp dir {temp_dir}: {e}")
-    
-        # Serve the file
-        doc = fetch_document(doc_id)
-        if not doc:
-            raise HTTPException(status_code=404, detail="Document not found")
-        path = doc.get("local_path")
-        if not path:
-            raise HTTPException(status_code=404, detail="File not stored locally")
-        return FileResponse(path, media_type="application/pdf")
-    finally:
-        _scrape_lock.release()
+@app.get("/scrape/{brand}/{model:path}")
+async def scrape_brand_model(brand: str, model: str):
+    async with _scrape_lock:
+        path = await run_in_threadpool(_scrape_and_get_local_path, brand, model)
+    return FileResponse(path, media_type="application/pdf")
 
 
 @app.get("/health")
