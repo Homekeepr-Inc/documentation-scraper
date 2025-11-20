@@ -1,14 +1,14 @@
-import asyncio
 import logging
 import sys
 import os
 import shutil
-from typing import Optional
+import threading
+from queue import Queue
+from typing import Optional, Tuple
 
 from fastapi import FastAPI, HTTPException, Request, Response
 from fastapi.responses import FileResponse, PlainTextResponse, HTMLResponse
 from fastapi.templating import Jinja2Templates
-from fastapi.concurrency import run_in_threadpool
 from starlette.responses import JSONResponse
 
 from .db import init_db, fetch_document, search_documents
@@ -59,8 +59,6 @@ if SCRAPER_SECRET == None or SCRAPER_SECRET == "":
 # Toggle to enable/disable SerpApi globally. Default to enabled.
 SERPAPI_ENABLED = os.getenv("SERPAPI_ENABLED", "true").strip().lower() not in {"false", "0", "no", ""}
 
-# Global lock to ensure only one scrape request runs at a time without blocking worker threads.
-_scrape_lock = asyncio.Lock()
 SUPPORTED_BRANDS = {
     "ge",
     "lg",
@@ -71,6 +69,37 @@ SUPPORTED_BRANDS = {
     "aosmith",
     "rheem",
 }
+
+ScrapeResult = Tuple[str, Optional[str], Optional[Exception]]
+
+class ScrapeJob:
+    __slots__ = ("brand", "model", "normalized_model", "result_queue")
+
+    def __init__(self, brand: str, model: str, normalized_model: str):
+        self.brand = brand
+        self.model = model
+        self.normalized_model = normalized_model
+        self.result_queue: Queue[ScrapeResult] = Queue(maxsize=1)
+
+
+_scrape_queue: "Queue[ScrapeJob]" = Queue()
+
+
+def _scrape_worker() -> None:
+    while True:
+        job = _scrape_queue.get()
+        try:
+            payload = _scrape_manual(job.brand, job.model)
+            path = _ingest_and_get_local_path(job.brand, job.normalized_model, payload)
+            job.result_queue.put(("ok", path, None))
+        except Exception as exc:  # noqa: BLE001
+            job.result_queue.put(("error", None, exc))
+        finally:
+            _scrape_queue.task_done()
+
+
+_worker = threading.Thread(target=_scrape_worker, daemon=True)
+_worker.start()
 
 @app.middleware("http")
 async def check_custom_header(request: Request, call_next):
@@ -97,8 +126,9 @@ def health() -> dict:
 
 @app.get("/status")
 def status():
-    if _scrape_lock.locked():
-        return Response(status_code=503, content="busy")
+    pending = _scrape_queue.qsize()
+    if pending:
+        return Response(status_code=503, content=f"busy ({pending} pending)")
     return {"status": "idle"}
 
 
@@ -314,18 +344,22 @@ def _ingest_and_get_local_path(brand: str, normalized_model: str, scrape_payload
 
 
 @app.get("/scrape/{brand}/{model:path}")
-async def scrape_brand_model(brand: str, model: str):
+def scrape_brand_model(brand: str, model: str):
     brand = brand.lower()
     normalized_model = normalize_model(model)
-    cached_path = await run_in_threadpool(_get_cached_local_path, brand, normalized_model)
+    cached_path = _get_cached_local_path(brand, normalized_model)
     if cached_path:
         return FileResponse(cached_path, media_type="application/pdf")
 
-    scrape_payload = await run_in_threadpool(_scrape_manual, brand, model)
+    job = ScrapeJob(brand, model, normalized_model)
+    _scrape_queue.put(job)
+    status, path, exc = job.result_queue.get()
+    if status == "ok" and path:
+        return FileResponse(path, media_type="application/pdf")
 
-    async with _scrape_lock:
-        path = await run_in_threadpool(_ingest_and_get_local_path, brand, normalized_model, scrape_payload)
-    return FileResponse(path, media_type="application/pdf")
+    if isinstance(exc, HTTPException):
+        raise exc
+    raise HTTPException(status_code=500, detail=str(exc) if exc else "Failed to scrape")
 
 
 @app.get("/health")
@@ -335,6 +369,7 @@ def health_check():
 
 @app.get("/status")
 def status_check():
-    if _scrape_lock.locked():
-        raise HTTPException(status_code=503, detail="Busy")
+    pending = _scrape_queue.qsize()
+    if pending:
+        raise HTTPException(status_code=503, detail=f"Busy ({pending} pending)")
     return {"status": "idle"}
