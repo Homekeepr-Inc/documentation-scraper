@@ -11,7 +11,22 @@ import re
 import sys
 from typing import List
 
-DEFAULT_CMD = ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+
+def _default_cmd() -> List[str]:
+    workers = os.getenv("GUNICORN_WORKERS", "1")
+    threads = os.getenv("GUNICORN_THREADS", "2")
+    return [
+        "gunicorn",
+        "app.main:app",
+        "-k",
+        "uvicorn.workers.UvicornWorker",
+        "--bind",
+        "0.0.0.0:8000",
+        "--workers",
+        workers,
+        "--threads",
+        threads,
+    ]
 PROFILE_ENV = "PROXY_PROFILE_NAMES"
 
 
@@ -54,7 +69,7 @@ def _log_assignment(hostname: str, profile: str) -> None:
 
 
 def main() -> None:
-    cmd = sys.argv[1:] or DEFAULT_CMD
+    cmd = sys.argv[1:] or _default_cmd()
     hostname = os.getenv("HOSTNAME", "")
     profiles = _parse_profiles()
 

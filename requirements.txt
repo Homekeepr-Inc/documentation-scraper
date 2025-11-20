@@ -1,5 +1,6 @@
 fastapi==0.112.2
 uvicorn==0.30.6
+gunicorn==21.2.0
 scrapy==2.11.1
 pdfminer.six==20231228
 pypdf==4.3.1
