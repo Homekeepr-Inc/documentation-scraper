@@ -10,6 +10,9 @@ class BrandConfig:
     additional_queries: List[str] = field(default_factory=list)
     max_candidates: int = 10
 
+# The product(s) path does not contain an owner's manual PDF and should not be scraped.
+SEARSPARTSDIRECT_QUERY_SUFFIX = '-inurl:"/product/" -inurl:"/products/"'
+
 
 @dataclass
 class ScraperStage:
@@ -17,6 +20,7 @@ class ScraperStage:
 
     name: str
     domains: List[str] = field(default_factory=list)
+    query_suffix: str = ""
 
 
 # Ordered scraper stages. Edit this list to change priority or add new scrapers.
@@ -24,6 +28,7 @@ SCRAPER_QUERY_STAGES: List[ScraperStage] = [
     ScraperStage(
         name="searspartsdirect",
         domains=["searspartsdirect.com"],
+        query_suffix=SEARSPARTSDIRECT_QUERY_SUFFIX,
     ),
     ScraperStage(
         name="manualslib",
@@ -164,14 +169,20 @@ def build_stage_queries(
     if domains:
         for domain in domains:
             if brand_model:
-                queries.append(f"{brand_model} {manual_phrase} site:{domain}")
+                base_query = f"{brand_model} {manual_phrase} site:{domain}"
             else:
-                queries.append(f"{manual_phrase} site:{domain}")
+                base_query = f"{manual_phrase} site:{domain}"
+            if stage.query_suffix:
+                base_query = f"{base_query} {stage.query_suffix.strip()}"
+            queries.append(base_query.strip())
     else:
         if brand_model:
-            queries.append(f"{brand_model} {manual_phrase}")
+            base_query = f"{brand_model} {manual_phrase}"
         else:
-            queries.append(manual_phrase)
+            base_query = manual_phrase
+        if stage.query_suffix:
+            base_query = f"{base_query} {stage.query_suffix.strip()}"
+        queries.append(base_query.strip())
 
     deduped: List[str] = []
     seen = set()

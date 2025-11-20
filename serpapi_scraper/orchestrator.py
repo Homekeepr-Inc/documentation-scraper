@@ -8,7 +8,12 @@ from urllib.parse import unquote, urlsplit
 import requests
 
 from .client import SerpApiClient, SerpApiConfigError, SerpApiError, SerpApiQuotaError
-from .config import BrandConfig, build_scraper_query_plan, get_brand_config
+from .config import (
+    BrandConfig,
+    build_scraper_query_plan,
+    get_brand_config,
+    SEARSPARTSDIRECT_QUERY_SUFFIX,
+)
 
 # Reuse existing scraper utilities for temp dir management and PDF validation.
 HEADLESS_UTILS_PATH = os.path.abspath(
@@ -103,6 +108,10 @@ def default_fallback_query_provider(config: BrandConfig, model: str) -> List[str
         query = f"{subject} {manual_phrase} site:searspartsdirect.com"
     else:
         query = f"{manual_phrase} site:searspartsdirect.com"
+    suffix = SEARSPARTSDIRECT_QUERY_SUFFIX.strip()
+    if suffix:
+        # Append the same SearsPartsDirect blacklist suffix we use for the primary stages.
+        query = f"{query} {suffix}"
     return [query]
 
 def build_browser_headers(referer: Optional[str]) -> Dict[str, str]:

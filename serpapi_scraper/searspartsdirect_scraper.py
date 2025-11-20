@@ -42,6 +42,7 @@ DOWNLOAD_LINK_SELECTOR = "div.download-guide a"
 OWNER_MANUAL_LINK_ID = "model-owner-manual"
 DEFAULT_NAVIGATION_TIMEOUT = 20
 DEFAULT_DOWNLOAD_TIMEOUT = 45
+DISALLOWED_PATH_PREFIXES = ("/product", "/products")
 
 
 @dataclass
@@ -66,6 +67,8 @@ def is_searspartsdirect_manual_page(url: str) -> bool:
     if not host.endswith("searspartsdirect.com"):
         return False
     path = (parsed.path or "").lower()
+    if any(path.startswith(prefix) for prefix in DISALLOWED_PATH_PREFIXES):
+        return False
     return not path.endswith(".pdf")
 
 
