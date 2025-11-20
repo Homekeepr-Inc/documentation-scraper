@@ -28,7 +28,7 @@
     # Main routes with load balancing
     route {
         reverse_proxy documentation-scraper-app-1:8000 documentation-scraper-app-2:8000 documentation-scraper-app-3:8000 documentation-scraper-app-4:8000 {
-            lb_policy round_robin
+            lb_policy least_conn
             health_uri /health
             health_interval 2s
             fail_duration 30s

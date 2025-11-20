@@ -13,19 +13,13 @@ from typing import List
 
 
 def _default_cmd() -> List[str]:
-    workers = os.getenv("GUNICORN_WORKERS", "1")
-    threads = os.getenv("GUNICORN_THREADS", "2")
     return [
-        "gunicorn",
+        "uvicorn",
         "app.main:app",
-        "-k",
-        "uvicorn.workers.UvicornWorker",
-        "--bind",
-        "0.0.0.0:8000",
-        "--workers",
-        workers,
-        "--threads",
-        threads,
+        "--host",
+        "0.0.0.0",
+        "--port",
+        "8000",
     ]
 PROFILE_ENV = "PROXY_PROFILE_NAMES"
 

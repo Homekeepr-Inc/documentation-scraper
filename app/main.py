@@ -11,7 +11,7 @@ from fastapi.responses import FileResponse, PlainTextResponse, HTMLResponse
 from fastapi.templating import Jinja2Templates
 from starlette.responses import JSONResponse
 
-from .db import init_db, fetch_document, search_documents
+from .db import init_db, fetch_document, search_documents, get_db
 from .logging_config import setup_logging
 
 # Filter out /health requests from uvicorn access logs
@@ -73,24 +73,28 @@ SUPPORTED_BRANDS = {
 ScrapeResult = Tuple[str, Optional[str], Optional[Exception]]
 
 class ScrapeJob:
-    __slots__ = ("brand", "model", "normalized_model", "result_queue")
+    __slots__ = ("brand", "model", "normalized_model", "payload", "result_queue")
 
-    def __init__(self, brand: str, model: str, normalized_model: str):
+    def __init__(self, brand: str, model: str, normalized_model: str, payload: dict):
         self.brand = brand
         self.model = model
         self.normalized_model = normalized_model
+        self.payload = payload
         self.result_queue: Queue[ScrapeResult] = Queue(maxsize=1)
 
 
 _scrape_queue: "Queue[ScrapeJob]" = Queue()
+
+MAX_CONCURRENT_SCRAPES = 2
+_scrape_semaphore = threading.Semaphore(MAX_CONCURRENT_SCRAPES)
+
 
 
 def _scrape_worker() -> None:
     while True:
         job = _scrape_queue.get()
         try:
-            payload = _scrape_manual(job.brand, job.model)
-            path = _ingest_and_get_local_path(job.brand, job.normalized_model, payload)
+            path = _ingest_and_get_local_path(job.brand, job.normalized_model, job.payload)
             job.result_queue.put(("ok", path, None))
         except Exception as exc:  # noqa: BLE001
             job.result_queue.put(("error", None, exc))
@@ -351,7 +355,14 @@ def scrape_brand_model(brand: str, model: str):
     if cached_path:
         return FileResponse(cached_path, media_type="application/pdf")
 
-    job = ScrapeJob(brand, model, normalized_model)
+    if not _scrape_semaphore.acquire(blocking=True, timeout=60):
+        raise HTTPException(status_code=503, detail="Server busy: too many concurrent scrapes")
+    try:
+        scrape_payload = _scrape_manual(brand, model)
+    finally:
+        _scrape_semaphore.release()
+
+    job = ScrapeJob(brand, model, normalized_model, scrape_payload)
     _scrape_queue.put(job)
     status, path, exc = job.result_queue.get()
     if status == "ok" and path:
