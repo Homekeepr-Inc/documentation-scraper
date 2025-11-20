@@ -91,12 +91,16 @@ _scrape_semaphore = threading.Semaphore(MAX_CONCURRENT_SCRAPES)
 
 
 def _scrape_worker() -> None:
+    logger.info("Scrape worker thread started")
     while True:
         job = _scrape_queue.get()
+        logger.info(f"Worker processing job for {job.brand}/{job.model}")
         try:
             path = _ingest_and_get_local_path(job.brand, job.normalized_model, job.payload)
+            logger.info(f"Worker finished job for {job.brand}/{job.model}")
             job.result_queue.put(("ok", path, None))
         except Exception as exc:  # noqa: BLE001
+            logger.error(f"Worker error for {job.brand}/{job.model}: {exc}")
             job.result_queue.put(("error", None, exc))
         finally:
             _scrape_queue.task_done()
@@ -349,22 +353,40 @@ def _ingest_and_get_local_path(brand: str, normalized_model: str, scrape_payload
 
 @app.get("/scrape/{brand}/{model:path}")
 def scrape_brand_model(brand: str, model: str):
+    req_id = os.urandom(4).hex()
+    logger.info(f"[{req_id}] Received scrape request for {brand}/{model}")
+    
     brand = brand.lower()
     normalized_model = normalize_model(model)
     cached_path = _get_cached_local_path(brand, normalized_model)
     if cached_path:
+        logger.info(f"[{req_id}] Found cached document")
         return FileResponse(cached_path, media_type="application/pdf")
 
+    logger.info(f"[{req_id}] Attempting to acquire semaphore (active={MAX_CONCURRENT_SCRAPES - _scrape_semaphore._value})")
     if not _scrape_semaphore.acquire(blocking=True, timeout=60):
+        logger.error(f"[{req_id}] Semaphore timeout - Server busy")
         raise HTTPException(status_code=503, detail="Server busy: too many concurrent scrapes")
+    
     try:
+        logger.info(f"[{req_id}] Semaphore acquired. Starting _scrape_manual")
         scrape_payload = _scrape_manual(brand, model)
+        logger.info(f"[{req_id}] _scrape_manual completed")
+    except Exception as e:
+        logger.error(f"[{req_id}] Error in _scrape_manual: {e}")
+        raise
     finally:
         _scrape_semaphore.release()
+        logger.info(f"[{req_id}] Semaphore released")
 
     job = ScrapeJob(brand, model, normalized_model, scrape_payload)
+    logger.info(f"[{req_id}] Enqueuing ingestion job")
     _scrape_queue.put(job)
+    
+    logger.info(f"[{req_id}] Waiting for ingestion result")
     status, path, exc = job.result_queue.get()
+    logger.info(f"[{req_id}] Ingestion result received: {status}")
+    
     if status == "ok" and path:
         return FileResponse(path, media_type="application/pdf")
 
