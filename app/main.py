@@ -110,6 +110,21 @@ _worker = threading.Thread(target=_scrape_worker, daemon=True)
 _worker.start()
 
 @app.middleware("http")
+async def log_request_arrival(request: Request, call_next):
+    req_id = os.urandom(4).hex()
+    # Attach req_id to request state so it can be used in endpoints
+    request.state.req_id = req_id
+    
+    logger.info(f"[{req_id}] REQUEST ARRIVAL: {request.method} {request.url.path} client={request.client.host if request.client else 'unknown'}")
+    try:
+        response = await call_next(request)
+        logger.info(f"[{req_id}] REQUEST COMPLETED: {response.status_code}")
+        return response
+    except Exception as e:
+        logger.error(f"[{req_id}] REQUEST FAILED: {e}")
+        raise
+
+@app.middleware("http")
 async def check_custom_header(request: Request, call_next):
     # Bypass header check for health check endpoints (internal)
     if request.url.path in ["/health", "/status"]:
@@ -352,9 +367,10 @@ def _ingest_and_get_local_path(brand: str, normalized_model: str, scrape_payload
 
 
 @app.get("/scrape/{brand}/{model:path}")
-def scrape_brand_model(brand: str, model: str):
-    req_id = os.urandom(4).hex()
-    logger.info(f"[{req_id}] Received scrape request for {brand}/{model}")
+def scrape_brand_model(brand: str, model: str, request: Request):
+    # Use existing req_id from middleware if available, or generate new one
+    req_id = getattr(request.state, "req_id", os.urandom(4).hex())
+    logger.info(f"[{req_id}] Processing scrape endpoint for {brand}/{model}")
     
     brand = brand.lower()
     normalized_model = normalize_model(model)
