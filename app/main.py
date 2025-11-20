@@ -176,12 +176,7 @@ def get_document_text(doc_id: int):
     raise HTTPException(status_code=404, detail="Text not available")
 
 
-def _scrape_and_get_local_path(brand: str, model: str) -> str:
-    """Runs the blocking scrape + ingest workflow and returns the local file path."""
-    brand = brand.lower()
-    brand_supported = brand in SUPPORTED_BRANDS
-    normalized_model = normalize_model(model)
-
+def _get_cached_local_path(brand: str, normalized_model: str) -> Optional[str]:
     from .db import get_db
 
     doc = (
@@ -194,7 +189,13 @@ def _scrape_and_get_local_path(brand: str, model: str) -> str:
     )
     if doc:
         return doc[1]
+    return None
 
+
+def _scrape_manual(brand: str, model: str):
+    """Fetches manual metadata without ingesting. Returns result dict or raises HTTPException."""
+    brand = brand.lower()
+    brand_supported = brand in SUPPORTED_BRANDS
     result = None
 
     if SERPAPI_ENABLED:
@@ -240,6 +241,18 @@ def _scrape_and_get_local_path(brand: str, model: str) -> str:
 
     if isinstance(result, list):
         result = result[0]
+
+    return {"data": result, "brand_supported": brand_supported}
+
+
+def _ingest_and_get_local_path(brand: str, normalized_model: str, scrape_payload: dict) -> str:
+    """Ingests the scraped manual and returns the local PDF path."""
+    cached = _get_cached_local_path(brand, normalized_model)
+    if cached:
+        return cached
+
+    result = scrape_payload["data"]
+    brand_supported = scrape_payload["brand_supported"]
 
     if brand_supported:
         if brand == "ge":
@@ -302,8 +315,16 @@ def _scrape_and_get_local_path(brand: str, model: str) -> str:
 
 @app.get("/scrape/{brand}/{model:path}")
 async def scrape_brand_model(brand: str, model: str):
+    brand = brand.lower()
+    normalized_model = normalize_model(model)
+    cached_path = await run_in_threadpool(_get_cached_local_path, brand, normalized_model)
+    if cached_path:
+        return FileResponse(cached_path, media_type="application/pdf")
+
+    scrape_payload = await run_in_threadpool(_scrape_manual, brand, model)
+
     async with _scrape_lock:
-        path = await run_in_threadpool(_scrape_and_get_local_path, brand, model)
+        path = await run_in_threadpool(_ingest_and_get_local_path, brand, normalized_model, scrape_payload)
     return FileResponse(path, media_type="application/pdf")
 
 
