@@ -111,6 +111,10 @@ _worker.start()
 
 @app.middleware("http")
 async def log_request_arrival(request: Request, call_next):
+    # Skip logging for health check endpoints
+    if request.url.path in ["/health", "/status"]:
+        return await call_next(request)
+    
     req_id = os.urandom(4).hex()
     # Attach req_id to request state so it can be used in endpoints
     request.state.req_id = req_id
