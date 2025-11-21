@@ -365,7 +365,10 @@ def collect_candidates(
         search_id or "unknown",
     )
 
-    for result in payload.get("organic_results", []) or []:
+    organic_results = payload.get("organic_results")
+    if organic_results is None:
+        organic_results = payload.get("organic")
+    for result in organic_results or []:
         url = result.get("link") or result.get("redirect_link")
         if not url or url in seen_urls:
             continue
@@ -400,7 +403,10 @@ def collect_candidates(
             candidates[-1]["score"],
         )
 
-    for item in payload.get("inline_images", []) or []:
+    inline_images = payload.get("inline_images")
+    if inline_images is None:
+        inline_images = payload.get("inlineImages")
+    for item in inline_images or []:
         url = item.get("source")
         if not url or url in seen_urls:
             continue

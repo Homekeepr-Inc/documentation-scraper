@@ -120,7 +120,7 @@
 - Implement guardrail: if SerpApi returns < N PDFs for a brand over rolling window, trigger health alert and auto-switch to headless mode.
 
 ## Configuration & Secrets
-- Store SerpApi key in existing secret manager (`SERPAPI_KEY`).
+- Store the Serper.dev key in existing secret manager (`SERPER_API_KEY`, with `SERPAPI_KEY` temporarily accepted for backwards compatibility).
 - Per-brand query templates, allowlists, and candidate caps live in `serpapi_scraper/config.py` (dataclass constants checked into the repo today); long term we can externalize this to YAML/JSON if ops needs runtime edits.
 - Feature flag (`SERPAPI_ENABLED`) to toggle new flow per brand during rollout.
 
