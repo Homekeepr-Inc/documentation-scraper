@@ -703,6 +703,7 @@ def wait_for_download(
     poll_interval=0.2,
     return_details=False,
     logger=None,
+    recent_mtime_window=1.0,
 ):
     """
     Wait for a download to complete in the specified directory.
@@ -716,6 +717,9 @@ def wait_for_download(
         poll_interval (float, optional): Seconds to sleep between directory polls.
         return_details (bool, optional): When True, return (path, info_dict); otherwise just the path.
         logger (Callable[[str], None], optional): Optional callable for debug logging.
+        recent_mtime_window (float, optional): Number of seconds before the wait_for_download call
+            during which file modifications are still considered "new". Helps capture downloads that
+            completed just before this function started. Defaults to 1.0 second.
 
     Returns:
         str or (str, dict): Path to the downloaded file, or None if timeout/no match.
@@ -740,6 +744,8 @@ def wait_for_download(
         if logger:
             logger(message)
 
+    grace_window = max(float(recent_mtime_window or 0.0), 0.0)
+
     while time.time() - start_time < timeout:
         try:
             current_entries = os.listdir(download_dir)
@@ -762,6 +768,10 @@ def wait_for_download(
                 continue
 
             entry_lower = entry.lower()
+            try:
+                entry_mtime = os.path.getmtime(entry_path)
+            except OSError:
+                continue
 
             if entry_lower.endswith(".crdownload"):
                 pending.append(entry)
@@ -782,13 +792,10 @@ def wait_for_download(
 
             # Ignore files that existed before and have not been modified recently.
             if entry in known_files and entry not in new_entries:
-                try:
-                    if os.path.getmtime(entry_path) <= start_time:
-                        continue
-                except OSError:
+                if entry_mtime <= start_time - grace_window:
                     continue
 
-            candidate_paths.append(entry_path)
+            candidate_paths.append((entry_path, entry_mtime))
             candidate_names.append(entry)
 
         if new_entries:
@@ -803,8 +810,8 @@ def wait_for_download(
         last_pending = pending
 
         if candidate_paths:
-            candidate_paths.sort(key=lambda path: os.path.getmtime(path), reverse=True)
-            result_path = candidate_paths[0]
+            candidate_paths.sort(key=lambda item: item[1], reverse=True)
+            result_path = candidate_paths[0][0]
             details = {
                 "new_files": candidate_names,
                 "pending": pending,
@@ -816,13 +823,51 @@ def wait_for_download(
 
         time.sleep(poll_interval)
 
+    elapsed = time.time() - start_time
     details = {
         "new_files": [],
         "pending": last_pending,
         "other_new_files": other_new_files,
-        "elapsed": time.time() - start_time,
+        "elapsed": elapsed,
         "timed_out": True,
     }
+
+    # As a final fallback, return the newest matching file that has been modified recently.
+    fallback_entries = []
+    try:
+        final_entries = os.listdir(download_dir)
+    except FileNotFoundError:
+        final_entries = []
+
+    for entry in final_entries:
+        entry_path = os.path.join(download_dir, entry)
+        if not os.path.isfile(entry_path):
+            continue
+        entry_lower = entry.lower()
+        if expected_extensions and not any(entry_lower.endswith(ext) for ext in expected_extensions):
+            continue
+        try:
+            entry_mtime = os.path.getmtime(entry_path)
+        except OSError:
+            continue
+        if entry_mtime < start_time - grace_window:
+            continue
+        if expected_filename_normalized:
+            candidate_lower = entry_lower
+            if candidate_lower != expected_filename_normalized:
+                candidate_base, _candidate_ext = os.path.splitext(candidate_lower)
+                if not candidate_base.startswith(expected_prefix or ""):
+                    continue
+        fallback_entries.append((entry_path, entry_mtime))
+
+    if fallback_entries:
+        fallback_entries.sort(key=lambda item: item[1], reverse=True)
+        result_path = fallback_entries[0][0]
+        details["fallback_used"] = True
+        details["fallback_candidate"] = os.path.basename(result_path)
+        details["timed_out"] = False
+        return (result_path, details) if return_details else result_path
+
     return (None, details) if return_details else None
 
 

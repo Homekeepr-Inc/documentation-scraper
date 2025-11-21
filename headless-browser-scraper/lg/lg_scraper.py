@@ -301,7 +301,7 @@ def scrape_lg_manual(model):
                     # Wait for download
                     print(f"Files in download_dir before wait: {os.listdir(download_dir)}")
                     print(f"Starting wait_for_download with timeout=30 in {download_dir}")
-                    pdf_url = wait_for_download(download_dir, timeout=30)
+                    pdf_url = wait_for_download(download_dir, timeout=30, initial_files=files_before)
                     print(f"Files in download_dir after wait: {os.listdir(download_dir)}")
                     if pdf_url:
                         print(f"Downloaded PDF: {pdf_url}")
