@@ -34,6 +34,18 @@ sys.path.append(os.path.join(os.path.dirname(__file__)))
 from utils import duckduckgo_fallback, validate_pdf_file, wait_for_download, safe_driver_get, validate_and_ingest_manual, create_temp_download_dir, cleanup_temp_dir, get_chrome_options, create_chrome_driver
 
 
+def normalize_model_number(model: str) -> str:
+    """
+    Remove trailing revision suffixes such as ' /01' so scraping uses the base model.
+    """
+    if not model:
+        return model
+    cleaned = model.strip()
+    if ' /' in cleaned:
+        cleaned = cleaned.rsplit(' /', 1)[0].strip()
+    elif '/' in cleaned:
+        cleaned = cleaned.rsplit('/', 1)[0].strip()
+    return cleaned
 
 
 def scrape_from_lg_page(driver, model, download_dir):
@@ -152,6 +164,10 @@ def scrape_lg_manual(model):
     Returns:
         dict: Scraped data or None if not found
     """
+    original_model = model
+    model = normalize_model_number(model)
+    if original_model.strip() != model:
+        print(f"Normalized model number from '{original_model}' to '{model}'")
     url = f"https://www.lg.com/us/support/product/{model}"
     pdf_url = None
 
@@ -239,10 +255,21 @@ def scrape_lg_manual(model):
                 return duckduckgo_fallback(driver, model, "lg.com/us", lambda d: scrape_from_lg_page(d, model, download_dir))
             # Get the PDF URL from the button
             try:
-                button = WebDriverWait(driver, 5).until(
-                    EC.element_to_be_clickable((By.XPATH, "//p[text()=\"Owner's Manual\"]"))
+                manual_cards = WebDriverWait(driver, 5).until(
+                    EC.presence_of_all_elements_located(
+                        (By.CSS_SELECTOR, "div.MuiPaper-root.MuiCard-root[role='button'][aria-description='PDF download']")
+                    )
                 )
-                # Skip href check as the div has no href
+                button = None
+                for card in manual_cards:
+                    paragraphs = card.find_elements(By.CSS_SELECTOR, "p")
+                    texts = [p.text.strip().lower() for p in paragraphs if p.text]
+                    if "owner's manual" in texts and "english" in texts:
+                        button = card
+                        break
+                if not button:
+                    print("Owner's Manual card not found among PDF download entries.")
+                    return None
                 print("Clicking manual item...")
                 files_before = set(os.listdir(download_dir))
                 # Use JS click to avoid interception
@@ -274,7 +301,7 @@ def scrape_lg_manual(model):
                     # Wait for download
                     print(f"Files in download_dir before wait: {os.listdir(download_dir)}")
                     print(f"Starting wait_for_download with timeout=30 in {download_dir}")
-                    pdf_url = wait_for_download(download_dir, timeout=30)
+                    pdf_url = wait_for_download(download_dir, timeout=30, initial_files=files_before)
                     print(f"Files in download_dir after wait: {os.listdir(download_dir)}")
                     if pdf_url:
                         print(f"Downloaded PDF: {pdf_url}")

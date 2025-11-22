@@ -29,6 +29,12 @@ import shutil
 # Import config for BLOB_ROOT and PROXY_URL
 from app.config import DEFAULT_BLOB_ROOT, PROXY_URL
 
+DEFAULT_DESKTOP_USER_AGENT = (
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+    "AppleWebKit/537.36 (KHTML, like Gecko) "
+    "Chrome/142.0.0.0 Safari/537.3"
+)
+
 def _detect_chrome_binary() -> Optional[str]:
     """
     Attempt to locate a Chrome executable that Selenium can launch.
@@ -106,12 +112,13 @@ def _detect_chromedriver_major_version(driver_path: Optional[str]) -> Optional[i
         return None
 
 
-def get_chrome_options(download_dir=None):
+def get_chrome_options(download_dir=None, user_agent: Optional[str] = DEFAULT_DESKTOP_USER_AGENT):
     """
     Build ChromeOptions with common scraper defaults and optional download directory.
 
     Args:
         download_dir (str, optional): Directory where Chrome should store downloads.
+        user_agent (str, optional): User-Agent string to expose; set to None to leave Chrome's default.
 
     Returns:
         ChromeOptions: Configured options instance.
@@ -126,7 +133,9 @@ def get_chrome_options(download_dir=None):
     options.add_argument('--disable-images')
     options.add_argument('--disable-plugins')
     options.add_argument('--disable-extensions')
-    options.add_argument('--user-agent=Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36')
+    # NEVER use the HeadlessChrome user-agent. Cloudflare will force a captcha on us.
+    if user_agent:
+        options.add_argument(f'--user-agent={user_agent}')
 
     if PROXY_URL:
         options.add_argument(f'--proxy-server={PROXY_URL}')
@@ -271,6 +280,81 @@ def _normalize_host(host: str) -> str:
 
     parsed = urlparse(candidate)
     return parsed.netloc or parsed.path or ""
+
+
+def generate_model_candidates(model: str, max_trim: int = 0) -> List[str]:
+    """
+    Build a list of model-number variants to broaden searches/matching.
+
+    Normalizes whitespace/separators and optionally trims trailing characters, which helps
+    when manufacturers publish manuals under slightly shortened model numbers.
+    """
+    if not model:
+        return []
+
+    raw = model.strip()
+    if not raw:
+        return []
+
+    separator_pattern = re.compile(r"[\s\-_/\.]+")
+    variants: List[str] = []
+    seen = set()
+
+    def add(candidate: str):
+        candidate = candidate.strip()
+        if not candidate or candidate in seen:
+            return
+        variants.append(candidate)
+        seen.add(candidate)
+
+    add(raw)
+
+    normalized_space = separator_pattern.sub(" ", raw)
+    add(normalized_space)
+
+    collapsed = separator_pattern.sub("", raw)
+    add(collapsed)
+
+    hyphenated = separator_pattern.sub("-", raw).strip("-")
+    add(hyphenated)
+
+    def add_trimmed(value: str):
+        trimmed = value
+        for _ in range(max_trim):
+            trimmed = trimmed[:-1].rstrip("-_/ .")
+            if len(trimmed) < 3:
+                break
+            add(trimmed)
+
+    add_trimmed(raw)
+    add_trimmed(collapsed)
+
+    return variants
+
+
+def match_model_in_text(text: str, model: str, max_trim: int = 0) -> Optional[str]:
+    """
+    Attempt to find any model-number variant within the provided text.
+
+    Returns the first variant that matches (case-insensitive), allowing for trimmed or
+    separator-free forms to catch loosely formatted product pages.
+    """
+    if not text or not model:
+        return None
+
+    lowered_text = text.lower()
+    compact_text = re.sub(r"[\s\-_/\.]+", "", lowered_text)
+
+    for candidate in generate_model_candidates(model, max_trim=max_trim):
+        candidate_lower = candidate.lower()
+        if candidate_lower and candidate_lower in lowered_text:
+            return candidate
+
+        compact_candidate = re.sub(r"[\s\-_/\.]+", "", candidate_lower)
+        if compact_candidate and compact_candidate in compact_text:
+            return candidate
+
+    return None
 
 
 def duckduckgo_fallback(
@@ -619,6 +703,7 @@ def wait_for_download(
     poll_interval=0.2,
     return_details=False,
     logger=None,
+    recent_mtime_window=1.0,
 ):
     """
     Wait for a download to complete in the specified directory.
@@ -632,6 +717,9 @@ def wait_for_download(
         poll_interval (float, optional): Seconds to sleep between directory polls.
         return_details (bool, optional): When True, return (path, info_dict); otherwise just the path.
         logger (Callable[[str], None], optional): Optional callable for debug logging.
+        recent_mtime_window (float, optional): Number of seconds before the wait_for_download call
+            during which file modifications are still considered "new". Helps capture downloads that
+            completed just before this function started. Defaults to 1.0 second.
 
     Returns:
         str or (str, dict): Path to the downloaded file, or None if timeout/no match.
@@ -656,6 +744,8 @@ def wait_for_download(
         if logger:
             logger(message)
 
+    grace_window = max(float(recent_mtime_window or 0.0), 0.0)
+
     while time.time() - start_time < timeout:
         try:
             current_entries = os.listdir(download_dir)
@@ -678,6 +768,10 @@ def wait_for_download(
                 continue
 
             entry_lower = entry.lower()
+            try:
+                entry_mtime = os.path.getmtime(entry_path)
+            except OSError:
+                continue
 
             if entry_lower.endswith(".crdownload"):
                 pending.append(entry)
@@ -698,13 +792,10 @@ def wait_for_download(
 
             # Ignore files that existed before and have not been modified recently.
             if entry in known_files and entry not in new_entries:
-                try:
-                    if os.path.getmtime(entry_path) <= start_time:
-                        continue
-                except OSError:
+                if entry_mtime <= start_time - grace_window:
                     continue
 
-            candidate_paths.append(entry_path)
+            candidate_paths.append((entry_path, entry_mtime))
             candidate_names.append(entry)
 
         if new_entries:
@@ -719,8 +810,8 @@ def wait_for_download(
         last_pending = pending
 
         if candidate_paths:
-            candidate_paths.sort(key=lambda path: os.path.getmtime(path), reverse=True)
-            result_path = candidate_paths[0]
+            candidate_paths.sort(key=lambda item: item[1], reverse=True)
+            result_path = candidate_paths[0][0]
             details = {
                 "new_files": candidate_names,
                 "pending": pending,
@@ -732,13 +823,51 @@ def wait_for_download(
 
         time.sleep(poll_interval)
 
+    elapsed = time.time() - start_time
     details = {
         "new_files": [],
         "pending": last_pending,
         "other_new_files": other_new_files,
-        "elapsed": time.time() - start_time,
+        "elapsed": elapsed,
         "timed_out": True,
     }
+
+    # As a final fallback, return the newest matching file that has been modified recently.
+    fallback_entries = []
+    try:
+        final_entries = os.listdir(download_dir)
+    except FileNotFoundError:
+        final_entries = []
+
+    for entry in final_entries:
+        entry_path = os.path.join(download_dir, entry)
+        if not os.path.isfile(entry_path):
+            continue
+        entry_lower = entry.lower()
+        if expected_extensions and not any(entry_lower.endswith(ext) for ext in expected_extensions):
+            continue
+        try:
+            entry_mtime = os.path.getmtime(entry_path)
+        except OSError:
+            continue
+        if entry_mtime < start_time - grace_window:
+            continue
+        if expected_filename_normalized:
+            candidate_lower = entry_lower
+            if candidate_lower != expected_filename_normalized:
+                candidate_base, _candidate_ext = os.path.splitext(candidate_lower)
+                if not candidate_base.startswith(expected_prefix or ""):
+                    continue
+        fallback_entries.append((entry_path, entry_mtime))
+
+    if fallback_entries:
+        fallback_entries.sort(key=lambda item: item[1], reverse=True)
+        result_path = fallback_entries[0][0]
+        details["fallback_used"] = True
+        details["fallback_candidate"] = os.path.basename(result_path)
+        details["timed_out"] = False
+        return (result_path, details) if return_details else result_path
+
     return (None, details) if return_details else None
 
 

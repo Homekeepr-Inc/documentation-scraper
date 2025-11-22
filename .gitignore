@@ -4,6 +4,7 @@ data/storage/*
 *.pem
 squid.conf
 manuals.db
+*.png
 
 # Byte-compiled / optimized / DLL files
 __pycache__/

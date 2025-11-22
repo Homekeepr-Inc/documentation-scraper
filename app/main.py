@@ -1,18 +1,25 @@
 import logging
 import sys
 import os
-import asyncio
-import tempfile
 import shutil
-from typing import Optional
+import threading
+from queue import Queue
+from typing import Optional, Tuple
 
 from fastapi import FastAPI, HTTPException, Request, Response
 from fastapi.responses import FileResponse, PlainTextResponse, HTMLResponse
 from fastapi.templating import Jinja2Templates
 from starlette.responses import JSONResponse
 
-from .db import init_db, fetch_document, search_documents
+from .db import init_db, fetch_document, search_documents, get_db
 from .logging_config import setup_logging
+
+# Filter out /health requests from uvicorn access logs
+class EndpointFilter(logging.Filter):
+    def filter(self, record: logging.LogRecord) -> bool:
+        return record.getMessage().find("GET /health") == -1
+
+logging.getLogger("uvicorn.access").addFilter(EndpointFilter())
 
 # Add path for headless scraper
 sys.path.append(os.path.join(os.path.dirname(__file__), '..', 'headless-browser-scraper'))
@@ -52,8 +59,74 @@ if SCRAPER_SECRET == None or SCRAPER_SECRET == "":
 # Toggle to enable/disable SerpApi globally. Default to enabled.
 SERPAPI_ENABLED = os.getenv("SERPAPI_ENABLED", "true").strip().lower() not in {"false", "0", "no", ""}
 
-# Global flag to track if currently scraping
-is_scraping = False
+SUPPORTED_BRANDS = {
+    "ge",
+    "lg",
+    "kitchenaid",
+    "whirlpool",
+    "samsung",
+    "frigidaire",
+    "aosmith",
+    "rheem",
+}
+
+ScrapeResult = Tuple[str, Optional[str], Optional[Exception]]
+
+class ScrapeJob:
+    __slots__ = ("brand", "model", "normalized_model", "payload", "result_queue")
+
+    def __init__(self, brand: str, model: str, normalized_model: str, payload: dict):
+        self.brand = brand
+        self.model = model
+        self.normalized_model = normalized_model
+        self.payload = payload
+        self.result_queue: Queue[ScrapeResult] = Queue(maxsize=1)
+
+
+_scrape_queue: "Queue[ScrapeJob]" = Queue()
+
+MAX_CONCURRENT_SCRAPES = 2
+_scrape_semaphore = threading.Semaphore(MAX_CONCURRENT_SCRAPES)
+
+
+
+def _scrape_worker() -> None:
+    logger.info("Scrape worker thread started")
+    while True:
+        job = _scrape_queue.get()
+        logger.info(f"Worker processing job for {job.brand}/{job.model}")
+        try:
+            path = _ingest_and_get_local_path(job.brand, job.normalized_model, job.payload)
+            logger.info(f"Worker finished job for {job.brand}/{job.model}")
+            job.result_queue.put(("ok", path, None))
+        except Exception as exc:  # noqa: BLE001
+            logger.error(f"Worker error for {job.brand}/{job.model}: {exc}")
+            job.result_queue.put(("error", None, exc))
+        finally:
+            _scrape_queue.task_done()
+
+
+_worker = threading.Thread(target=_scrape_worker, daemon=True)
+_worker.start()
+
+@app.middleware("http")
+async def log_request_arrival(request: Request, call_next):
+    # Skip logging for health check endpoints
+    if request.url.path in ["/health", "/status"]:
+        return await call_next(request)
+    
+    req_id = os.urandom(4).hex()
+    # Attach req_id to request state so it can be used in endpoints
+    request.state.req_id = req_id
+    
+    logger.info(f"[{req_id}] REQUEST ARRIVAL: {request.method} {request.url.path} client={request.client.host if request.client else 'unknown'}")
+    try:
+        response = await call_next(request)
+        logger.info(f"[{req_id}] REQUEST COMPLETED: {response.status_code}")
+        return response
+    except Exception as e:
+        logger.error(f"[{req_id}] REQUEST FAILED: {e}")
+        raise
 
 @app.middleware("http")
 async def check_custom_header(request: Request, call_next):
@@ -80,8 +153,9 @@ def health() -> dict:
 
 @app.get("/status")
 def status():
-    if is_scraping:
-        return Response(status_code=503, content="busy")
+    pending = _scrape_queue.qsize()
+    if pending:
+        return Response(status_code=503, content=f"busy ({pending} pending)")
     return {"status": "idle"}
 
 
@@ -159,129 +233,186 @@ def get_document_text(doc_id: int):
     raise HTTPException(status_code=404, detail="Text not available")
 
 
-@app.get("/scrape/{brand}/{model:path}")
-def scrape_brand_model(brand: str, model: str):
-    global is_scraping  # pylint: disable=global-statement
-    brand = brand.lower()
-    supported_brands = {'ge', 'lg', 'kitchenaid', 'whirlpool', 'samsung', 'frigidaire', 'aosmith', 'rheem'}
-    if brand not in supported_brands:
-        raise HTTPException(status_code=400, detail="Unsupported brand")
-
-    normalized_model = normalize_model(model)
-
-    # Check DB for existing document
+def _get_cached_local_path(brand: str, normalized_model: str) -> Optional[str]:
     from .db import get_db
-    doc = get_db().execute("SELECT id, local_path FROM documents WHERE brand = ? AND model_number = ? AND local_path IS NOT NULL LIMIT 1", (brand, normalized_model)).fetchone()
+
+    doc = (
+        get_db()
+        .execute(
+            "SELECT id, local_path FROM documents WHERE brand = ? AND model_number = ? AND local_path IS NOT NULL LIMIT 1",
+            (brand, normalized_model),
+        )
+        .fetchone()
+    )
     if doc:
-        return FileResponse(doc[1], media_type="application/pdf")
+        return doc[1]
+    return None
 
-    # Not cached, scrape synchronously
-    is_scraping = True
-    try:
-        result = None
 
-        if SERPAPI_ENABLED:
-            try:
-                serpapi_result = fetch_manual_with_serpapi(brand, model)
-                if serpapi_result:
-                    result = serpapi_result
-            except SerpApiQuotaError as exc:
-                # Log and fall back to brand-specific scraper
-                logger.warning(
-                    "SerpApi quota exceeded for brand=%s model=%s: %s",
-                    brand,
-                    model,
-                    exc,
-                )
-            except SerpApiError as exc:
-                # Log and fall back silently
-                logger.warning(
-                    "SerpApi error for brand=%s model=%s: %s",
-                    brand,
-                    model,
-                    exc,
-                )
+def _scrape_manual(brand: str, model: str):
+    """Fetches manual metadata without ingesting. Returns result dict or raises HTTPException."""
+    brand = brand.lower()
+    brand_supported = brand in SUPPORTED_BRANDS
+    result = None
 
-        if result is None:
-            if brand == 'ge':
-                result = scrape_ge_manual(model)
-            elif brand == 'lg':
-                result = scrape_lg_manual(model)
-            elif brand == 'kitchenaid':
-                result = scrape_kitchenaid_manual(model)
-            elif brand == 'whirlpool':
-                result = scrape_whirlpool_manual(model)
-            elif brand == 'samsung':
-                result = scrape_samsung_manual(model)
-            elif brand == 'frigidaire':
-                result = scrape_frigidaire_manual(model)
-            elif brand == 'aosmith':
-                result = scrape_aosmith_manual(model)
-            elif brand == 'rheem':
-                result = scrape_rheem_manual(model)
-            else:
-                result = None
+    if SERPAPI_ENABLED:
+        try:
+            serpapi_result = fetch_manual_with_serpapi(brand, model)
+            if serpapi_result:
+                result = serpapi_result
+        except SerpApiQuotaError as exc:
+            logger.warning(
+                "SerpApi quota exceeded for brand=%s model=%s: %s",
+                brand,
+                model,
+                exc,
+            )
+        except SerpApiError as exc:
+            logger.warning(
+                "SerpApi error for brand=%s model=%s: %s",
+                brand,
+                model,
+                exc,
+            )
 
-        if not result:
-            raise HTTPException(status_code=404, detail="No manual found")
-    
-        # Handle case where result is a list (take first result)
-        if isinstance(result, list):
-            result = result[0]
-        # Select ingest function based on brand
-        if brand == 'ge':
+    if result is None and brand_supported:
+        if brand == "ge":
+            result = scrape_ge_manual(model)
+        elif brand == "lg":
+            result = scrape_lg_manual(model)
+        elif brand == "kitchenaid":
+            result = scrape_kitchenaid_manual(model)
+        elif brand == "whirlpool":
+            result = scrape_whirlpool_manual(model)
+        elif brand == "samsung":
+            result = scrape_samsung_manual(model)
+        elif brand == "frigidaire":
+            result = scrape_frigidaire_manual(model)
+        elif brand == "aosmith":
+            result = scrape_aosmith_manual(model)
+        elif brand == "rheem":
+            result = scrape_rheem_manual(model)
+
+    if not result:
+        raise HTTPException(status_code=404, detail="No manual found")
+
+    if isinstance(result, list):
+        result = result[0]
+
+    return {"data": result, "brand_supported": brand_supported}
+
+
+def _ingest_and_get_local_path(brand: str, normalized_model: str, scrape_payload: dict) -> str:
+    """Ingests the scraped manual and returns the local PDF path."""
+    cached = _get_cached_local_path(brand, normalized_model)
+    if cached:
+        return cached
+
+    result = scrape_payload["data"]
+    brand_supported = scrape_payload["brand_supported"]
+
+    if brand_supported:
+        if brand == "ge":
             ingest_func = ingest_ge_manual
-        elif brand == 'lg':
+        elif brand == "lg":
             ingest_func = ingest_lg_manual
-        elif brand == 'kitchenaid':
+        elif brand == "kitchenaid":
             ingest_func = ingest_kitchenaid_manual
-        elif brand == 'whirlpool':
+        elif brand == "whirlpool":
             ingest_func = ingest_whirlpool_manual
-        elif brand == 'samsung':
+        elif brand == "samsung":
             ingest_func = ingest_samsung_manual
-        elif brand == 'frigidaire':
+        elif brand == "frigidaire":
             ingest_func = ingest_frigidaire_manual
-        elif brand == 'aosmith':
+        elif brand == "aosmith":
             ingest_func = ingest_aosmith_manual
-        elif brand == 'rheem':
+        elif brand == "rheem":
             ingest_func = ingest_rheem_manual
-    
+
         ingest_result = ingest_func(result)
-        if not ingest_result or not ingest_result.id:
-            # Check if already exists
-            doc = get_db().execute("SELECT id FROM documents WHERE file_url = ?", (result['file_url'],)).fetchone()
-            if doc:
-                doc_id = doc[0]
-            else:
-                raise HTTPException(status_code=500, detail="Failed to ingest")
+    else:
+        ingest_result = validate_and_ingest_manual(result)
+
+    if not ingest_result or not ingest_result.id:
+        doc = (
+            get_db()
+            .execute("SELECT id FROM documents WHERE file_url = ?", (result["file_url"],))
+            .fetchone()
+        )
+        if doc:
+            doc_id = doc[0]
         else:
-            doc_id = ingest_result.id
+            raise HTTPException(status_code=500, detail="Failed to ingest")
+    else:
+        doc_id = ingest_result.id
+
+    if result and result.get("local_path"):
+        temp_dir = os.path.dirname(result["local_path"])
+        scraper_temp_dir = os.path.abspath(
+            os.path.join(os.path.dirname(__file__), "..", "headless-browser-scraper", "temp")
+        )
+        temp_dir = os.path.abspath(temp_dir)
+        if temp_dir and os.path.exists(temp_dir):
+            try:
+                common = os.path.commonpath([scraper_temp_dir, temp_dir])
+                if common == scraper_temp_dir:
+                    shutil.rmtree(temp_dir)
+                    print(f"Cleaned up temp dir: {temp_dir}")
+            except (ValueError, OSError) as e:
+                print(f"Error cleaning temp dir {temp_dir}: {e}")
+
+    doc = fetch_document(doc_id)
+    if not doc:
+        raise HTTPException(status_code=404, detail="Document not found")
+    path = doc.get("local_path")
+    if not path:
+        raise HTTPException(status_code=404, detail="File not stored locally")
+    return path
+
+
+@app.get("/scrape/{brand}/{model:path}")
+def scrape_brand_model(brand: str, model: str, request: Request):
+    # Use existing req_id from middleware if available, or generate new one
+    req_id = getattr(request.state, "req_id", os.urandom(4).hex())
+    logger.info(f"[{req_id}] Processing scrape endpoint for {brand}/{model}")
     
-        # Clean up temp directory if it exists
-        if result and result.get('local_path'):
-            temp_dir = os.path.dirname(result['local_path'])
-            scraper_temp_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'headless-browser-scraper', 'temp'))
-            temp_dir = os.path.abspath(temp_dir)
-            if temp_dir and os.path.exists(temp_dir):
-                try:
-                    # Use commonpath for reliable subdirectory check
-                    common = os.path.commonpath([scraper_temp_dir, temp_dir])
-                    if common == scraper_temp_dir:
-                        shutil.rmtree(temp_dir)
-                        print(f"Cleaned up temp dir: {temp_dir}")
-                except (ValueError, OSError) as e:
-                    print(f"Error cleaning temp dir {temp_dir}: {e}")
+    brand = brand.lower()
+    normalized_model = normalize_model(model)
+    cached_path = _get_cached_local_path(brand, normalized_model)
+    if cached_path:
+        logger.info(f"[{req_id}] Found cached document")
+        return FileResponse(cached_path, media_type="application/pdf")
+
+    logger.info(f"[{req_id}] Attempting to acquire semaphore (active={MAX_CONCURRENT_SCRAPES - _scrape_semaphore._value})")
+    if not _scrape_semaphore.acquire(blocking=True, timeout=60):
+        logger.error(f"[{req_id}] Semaphore timeout - Server busy")
+        raise HTTPException(status_code=503, detail="Server busy: too many concurrent scrapes")
     
-        # Serve the file
-        doc = fetch_document(doc_id)
-        if not doc:
-            raise HTTPException(status_code=404, detail="Document not found")
-        path = doc.get("local_path")
-        if not path:
-            raise HTTPException(status_code=404, detail="File not stored locally")
-        return FileResponse(path, media_type="application/pdf")
+    try:
+        logger.info(f"[{req_id}] Semaphore acquired. Starting _scrape_manual")
+        scrape_payload = _scrape_manual(brand, model)
+        logger.info(f"[{req_id}] _scrape_manual completed")
+    except Exception as e:
+        logger.error(f"[{req_id}] Error in _scrape_manual: {e}")
+        raise
     finally:
-        is_scraping = False
+        _scrape_semaphore.release()
+        logger.info(f"[{req_id}] Semaphore released")
+
+    job = ScrapeJob(brand, model, normalized_model, scrape_payload)
+    logger.info(f"[{req_id}] Enqueuing ingestion job")
+    _scrape_queue.put(job)
+    
+    logger.info(f"[{req_id}] Waiting for ingestion result")
+    status, path, exc = job.result_queue.get()
+    logger.info(f"[{req_id}] Ingestion result received: {status}")
+    
+    if status == "ok" and path:
+        return FileResponse(path, media_type="application/pdf")
+
+    if isinstance(exc, HTTPException):
+        raise exc
+    raise HTTPException(status_code=500, detail=str(exc) if exc else "Failed to scrape")
 
 
 @app.get("/health")
@@ -291,6 +422,7 @@ def health_check():
 
 @app.get("/status")
 def status_check():
-    if is_scraping:
-        raise HTTPException(status_code=503, detail="Busy")
+    pending = _scrape_queue.qsize()
+    if pending:
+        raise HTTPException(status_code=503, detail=f"Busy ({pending} pending)")
     return {"status": "idle"}

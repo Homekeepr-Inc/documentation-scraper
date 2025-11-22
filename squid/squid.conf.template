@@ -1,24 +1,20 @@
-# Squid configuration template for round-robin upstream proxy rotation
+# Squid configuration template rendered per container
 
 http_port 8888
 
-# Upstream proxies (add more cache_peer lines as needed for additional upstreams)
-cache_peer ${UPSTREAM_1_HOST} parent ${UPSTREAM_PROXY_PORT} 0 proxy-only no-query no-digest login=${UPSTREAM_1_USER_PASS} round-robin name=upstream1
-cache_peer ${UPSTREAM_2_HOST} parent ${UPSTREAM_PROXY_PORT} 0 proxy-only no-query no-digest login=${UPSTREAM_2_USER_PASS} round-robin name=upstream2
-
-# Allow access to all upstream peers
-cache_peer_access upstream1 allow all
-cache_peer_access upstream2 allow all
+${CACHE_PEER_CONFIG}
 
 never_direct allow all
 
 # Access control
 acl localnet src 127.0.0.1
-acl localnet src 172.18.0.0/16
+acl localnet src 172.16.0.0/12
+acl localnet src 10.0.0.0/8
+acl localnet src 192.168.0.0/16
 http_access allow localnet
 http_access deny all
 
-# Logging
+# Logging disabled (avoid leaking target URLs)
 access_log none
 cache_log none
 

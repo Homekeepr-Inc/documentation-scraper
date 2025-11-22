@@ -1,5 +1,5 @@
 from dataclasses import dataclass, field
-from typing import Dict, List
+from typing import Dict, List, Optional, Tuple
 
 
 @dataclass
@@ -9,6 +9,32 @@ class BrandConfig:
     domains: List[str] = field(default_factory=list)
     additional_queries: List[str] = field(default_factory=list)
     max_candidates: int = 10
+
+# The product(s) path does not contain an owner's manual PDF and should not be scraped.
+SEARSPARTSDIRECT_QUERY_SUFFIX = '-inurl:"/product/" -inurl:"/products/"'
+
+
+@dataclass
+class ScraperStage:
+    """Defines a SerpApi scraping stage with its preferred search domains."""
+
+    name: str
+    domains: List[str] = field(default_factory=list)
+    query_suffix: str = ""
+
+
+# Ordered scraper stages. Edit this list to change priority or add new scrapers.
+SCRAPER_QUERY_STAGES: List[ScraperStage] = [
+    ScraperStage(
+        name="searspartsdirect",
+        domains=["searspartsdirect.com"],
+        query_suffix=SEARSPARTSDIRECT_QUERY_SUFFIX,
+    ),
+    ScraperStage(
+        name="manualslib",
+        domains=["manualslib.com"],
+    ),
+]
 
 
 # Brand-specific configuration for query generation and scoring hints.
@@ -127,39 +153,37 @@ def get_brand_config(brand: str) -> BrandConfig:
     return BrandConfig(brand=brand_lower, display_name=display_name)
 
 
-def build_queries(config: BrandConfig, model: str) -> List[str]:
-    """Construct ordered list of search queries for a brand/model pair."""
+def build_stage_queries(
+    config: BrandConfig,
+    model: str,
+    stage: ScraperStage,
+) -> List[str]:
+    """Construct SerpApi queries for a single scraper stage."""
+
     queries: List[str] = []
     normalized_model = model.strip()
-
-    # Domain-targeted queries first.
-    # for domain in config.domains:
-    #     domain = domain.strip()
-    #     if not domain:
-    #         continue
-    #     queries.append(
-    #         f"{config.display_name} {normalized_model} owner's manual filetype:pdf site:{domain}"
-    #     )
-    #     queries.append(
-    #         f"{config.display_name} {normalized_model} manual filetype:pdf site:{domain}"
-    #     )
-
-    # Brand-specific templates.
-    # for template in config.additional_queries:
-    #     queries.append(template.format(model=normalized_model, brand=config.display_name))
-
-    # Shared templates.
-    # for template in DEFAULT_QUERY_TEMPLATES:
-    #     queries.append(template.format(model=normalized_model, brand=config.display_name))
-
     brand_model = " ".join(part for part in [config.display_name, normalized_model] if part)
     manual_phrase = "owner's manual"
-    if brand_model:
-        queries.append(f"{brand_model} {manual_phrase} site:manualslib.com")
-    else:
-        queries.append(f"{manual_phrase} site:manualslib.com")
 
-    # Deduplicate while preserving order.
+    domains = [domain.strip() for domain in stage.domains if domain.strip()]
+    if domains:
+        for domain in domains:
+            if brand_model:
+                base_query = f"{brand_model} {manual_phrase} site:{domain}"
+            else:
+                base_query = f"{manual_phrase} site:{domain}"
+            if stage.query_suffix:
+                base_query = f"{base_query} {stage.query_suffix.strip()}"
+            queries.append(base_query.strip())
+    else:
+        if brand_model:
+            base_query = f"{brand_model} {manual_phrase}"
+        else:
+            base_query = manual_phrase
+        if stage.query_suffix:
+            base_query = f"{base_query} {stage.query_suffix.strip()}"
+        queries.append(base_query.strip())
+
     deduped: List[str] = []
     seen = set()
     for query in queries:
@@ -168,5 +192,21 @@ def build_queries(config: BrandConfig, model: str) -> List[str]:
         seen.add(query)
         deduped.append(query)
 
-    # Cap at a reasonable number to control SerpApi usage.
     return deduped[: max(1, config.max_candidates)]
+
+
+def build_scraper_query_plan(
+    config: BrandConfig,
+    model: str,
+    *,
+    stages: Optional[List[ScraperStage]] = None,
+) -> List[Tuple[ScraperStage, List[str]]]:
+    """Return ordered (stage, queries) pairs describing the SerpApi search plan."""
+
+    selected_stages = stages or SCRAPER_QUERY_STAGES
+    plan: List[Tuple[ScraperStage, List[str]]] = []
+    for stage in selected_stages:
+        queries = build_stage_queries(config, model, stage)
+        if queries:
+            plan.append((stage, queries))
+    return plan

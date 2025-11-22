@@ -1,19 +1,19 @@
-import base64
-import contextlib
 import logging
 import os
 import re
 import sys
-import tempfile
-from functools import lru_cache
-from typing import Any, Dict, Iterable, List, Optional, Tuple
+from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple
 from urllib.parse import unquote, urlsplit
 
 import requests
-from pypdf import PdfReader, PdfWriter
 
 from .client import SerpApiClient, SerpApiConfigError, SerpApiError, SerpApiQuotaError
-from .config import BrandConfig, build_queries, get_brand_config
+from .config import (
+    BrandConfig,
+    build_scraper_query_plan,
+    get_brand_config,
+    SEARSPARTSDIRECT_QUERY_SUFFIX,
+)
 
 # Reuse existing scraper utilities for temp dir management and PDF validation.
 HEADLESS_UTILS_PATH = os.path.abspath(
@@ -33,18 +33,17 @@ from .manualslib_scraper import (
     download_manual_from_product_page,
     is_manualslib_product_url,
 )
+from .searspartsdirect_scraper import (
+    SearsPartsDirectDownload,
+    download_manual_from_product_page as download_searspartsdirect_from_page,
+    is_searspartsdirect_manual_page,
+)
 from app.config import DOWNLOAD_TIMEOUT, USER_AGENT, PROXY_URL
 
 PdfResult = Dict[str, Any]
+FallbackQueryProvider = Callable[[BrandConfig, str], List[str]]
 
 logger = logging.getLogger("serpapi.orchestrator")
-
-
-def _env_flag(name: str, default: bool = False) -> bool:
-    raw = (os.getenv(name) or "").strip().lower()
-    if not raw:
-        return default
-    return raw in {"1", "true", "yes", "on"}
 
 
 # Simple keyword mapping to infer document type heuristically.
@@ -67,114 +66,9 @@ DOC_TYPE_KEYWORDS: Dict[str, Iterable[str]] = {
     ),
 }
 
-# Additional PDF content heuristics to validate we captured an actual manual.
-PDF_KEYWORDS: Dict[str, Tuple[str, ...]] = {
-    "owner": (
-        "owner's manual",
-        "owners manual",
-        "owner manual",
-        "use and care",
-        "use & care",
-        "user manual",
-        "user guide",
-        "instruction manual",
-        "operating instructions",
-        "operation manual",
-        "instruction booklet",
-        "installation and operation manual",
-        "maintenance and care",
-    ),
-    "installation": (
-        "installation instructions",
-        "installation manual",
-        "installation guide",
-        "install this water heater",
-        "install the appliance",
-        "venting instructions",
-        "setup instructions",
-        "installation requirements",
-    ),
-    "tech": (
-        "service manual",
-        "service information",
-        "technical service",
-        "troubleshooting guide",
-        "wiring diagram",
-        "parts list",
-        "diagnostic codes",
-    ),
-    "guide": (
-        "quick start guide",
-        "quick reference guide",
-        "cycle guide",
-        "use guide",
-    ),
-    "parts": (
-        "parts manual",
-        "parts list",
-        "parts catalog",
-        "parts catalogue",
-        "parts diagram",
-        "exploded view",
-        "replacement parts",
-        "service parts",
-        "parts breakdown",
-    ),
-}
-
-MARKETING_KEYWORDS: Tuple[str, ...] = (
-    "brochure",
-    "brochures",
-    "product overview",
-    "sell sheet",
-    "sell-sheet",
-    "sales sheet",
-    "marketing",
-    "catalog",
-    "fact sheet",
-    "spec sheet",
-    "specification sheet",
-    "datasheet",
-    "feature highlights",
-    "product highlights",
-    "promo",
-)
-
-MANUAL_TOKENS: Tuple[str, ...] = (
-    "manual",
-    "instructions",
-    "guide",
-    "use and care",
-    "use & care",
-)
-
-MAX_ANALYZED_PAGES = 6
-MAX_ANALYZED_CHARACTERS = 20000
 ACCEPTABLE_DOC_TYPES = {"owner"}
 DISALLOWED_DOC_TYPES = {"parts"}
 DISALLOWED_LOCALE_SUBSTRINGS = ("/es-mx/",)
-LANGUAGE_KEYWORDS: Dict[str, Tuple[str, ...]] = {
-    "english": (
-        "warning",
-        "caution",
-        "read and save these instructions",
-        "important safety instructions",
-        "english",
-        "customer care",
-        "service and support",
-    ),
-    "spanish": (
-        "manual de",
-        "instrucciones de",
-        "en español",
-        "advertencia",
-        "precaución",
-        "peligro",
-        "seguridad",
-        "guarde estas instrucciones",
-        "español",
-    ),
-}
 DEFAULT_ACCEPT_LANGUAGE = "en-US,en;q=0.9"
 HEADLESS_FALLBACK_HOSTS = {
     "whirlpool.com",
@@ -198,131 +92,27 @@ BROWSER_SEC_CH_HEADERS = {
     "sec-ch-ua-platform": '"macOS"',
 }
 
-# Gate the Gemini flow behind env flags so production defaults stay unchanged.
-USE_GEMINI_VALIDATION = _env_flag("SERPAPI_USE_GEMINI_VALIDATION", False)
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
-GEMINI_MODEL_NAME = os.getenv("SERPAPI_GEMINI_MODEL", "models/gemini-2.5-flash")
-GEMINI_PAGE_LIMIT = int(os.getenv("SERPAPI_GEMINI_PAGE_LIMIT", "5") or "5")
-if GEMINI_PAGE_LIMIT <= 0:
-    GEMINI_PAGE_LIMIT = 5
-GEMINI_PROMPT_TEMPLATE = (
-    os.getenv("SERPAPI_GEMINI_PROMPT")
-    or (
-        "You are checking whether a PDF contains the owner's manual for a specific appliance. "
-        "Respond with a single word: 'yes' if the document is the owner's manual for the given brand "
-        "and model, otherwise respond 'no'. Do not add explanations."
-    )
-)
-GEMINI_REQUEST_TIMEOUT = int(os.getenv("SERPAPI_GEMINI_TIMEOUT", "45") or "45")
-GEMINI_LOGGER = logging.getLogger("serpapi.gemini")
-GEMINI_ENDPOINT = "https://generativelanguage.googleapis.com/v1beta"
 
+def default_fallback_query_provider(config: BrandConfig, model: str) -> List[str]:
+    """Default fallback queries (SearsPartsDirect) used when primary searches return nothing."""
 
-@lru_cache(maxsize=1)
-def _gemini_enabled() -> bool:
-    """Resolve whether Gemini can be used, logging once if misconfigured."""
-    if not USE_GEMINI_VALIDATION:
-        return False
-    if not GEMINI_API_KEY:
-        GEMINI_LOGGER.error(
-            "SERPAPI_USE_GEMINI_VALIDATION enabled but GEMINI_API_KEY is not set; disabling Gemini validation."
-        )
-        return False
-    return True
-
-
-def _build_pdf_excerpt(local_path: str, page_limit: int) -> Tuple[str, bool]:
-    """Trim large PDFs down to the first N pages since Gemini pricing scales with file size."""
-    reader = PdfReader(local_path)
-    total = len(reader.pages)
-    if total <= page_limit:
-        return local_path, False
-
-    writer = PdfWriter()
-    for page in reader.pages[:page_limit]:
-        writer.add_page(page)
-
-    with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as temp_file:
-        writer.write(temp_file)  # type: ignore[arg-type]
-        excerpt_path = temp_file.name
-    return excerpt_path, True
-
-
-def _run_gemini_validation(pdf_path: str, brand: str, model: str) -> Tuple[Optional[bool], str]:
-    """Upload the excerpt and normalize Gemini's response to a boolean."""
-    prompt = f"{GEMINI_PROMPT_TEMPLATE}\nBrand: {brand}\nModel: {model}"
-    try:
-        with open(pdf_path, "rb") as pdf_handle:
-            encoded = base64.b64encode(pdf_handle.read()).decode("utf-8")
-    except OSError as exc:
-        GEMINI_LOGGER.warning(
-            "Failed to read PDF for Gemini validation path=%s error=%s", pdf_path, exc
-        )
-        return None, ""
-
-    request_body = {
-        "contents": [
-            {
-                "role": "user",
-                "parts": [
-                    {"text": prompt},
-                    {
-                        "inlineData": {
-                            "mimeType": "application/pdf",
-                            "data": encoded,
-                        }
-                    },
-                ],
-            }
-        ]
-    }
-
-    url = f"{GEMINI_ENDPOINT}/{GEMINI_MODEL_NAME}:generateContent?key={GEMINI_API_KEY}"
-    try:
-        response = requests.post(
-            url,
-            json=request_body,
-            timeout=GEMINI_REQUEST_TIMEOUT,
-        )
-        response.raise_for_status()
-    except Exception as exc:  # pylint: disable=broad-except
-        GEMINI_LOGGER.warning(
-            "Gemini validation failed brand=%s model=%s error=%s", brand, model, exc
-        )
-        return None, ""
-
-    payload = response.json()
-    candidates = payload.get("candidates") or []
-    if not candidates:
-        GEMINI_LOGGER.warning(
-            "Gemini response missing candidates brand=%s model=%s payload=%s",
-            brand,
-            model,
-            payload,
-        )
-        return None, ""
-
-    text_response = ""
-    first_candidate = candidates[0]
-    parts = (first_candidate.get("content") or {}).get("parts") if isinstance(first_candidate, dict) else None
-    if parts:
-        for part in parts:
-            text = part.get("text")
-            if text:
-                text_response = text.strip()
-                break
-
-    normalized = text_response.lower()
-    if "yes" in normalized.split():
-        return True, text_response
-    if "no" in normalized.split():
-        return False, text_response
-    if "yes" in normalized:
-        return True, text_response
-    if "no" in normalized:
-        return False, text_response
-    return None, text_response
-
+    normalized_model = model.strip()
+    manual_phrase = "owner's manual"
+    subject_parts = []
+    if config.display_name:
+        subject_parts.append(config.display_name.strip())
+    if normalized_model:
+        subject_parts.append(normalized_model)
+    subject = " ".join(part for part in subject_parts if part)
+    if subject:
+        query = f"{subject} {manual_phrase} site:searspartsdirect.com"
+    else:
+        query = f"{manual_phrase} site:searspartsdirect.com"
+    suffix = SEARSPARTSDIRECT_QUERY_SUFFIX.strip()
+    if suffix:
+        # Append the same SearsPartsDirect blacklist suffix we use for the primary stages.
+        query = f"{query} {suffix}"
+    return [query]
 
 def build_browser_headers(referer: Optional[str]) -> Dict[str, str]:
     headers: Dict[str, str] = {
@@ -420,6 +210,10 @@ def is_probable_pdf(url: str) -> bool:
     return sanitized.endswith(".pdf")
 
 
+def is_allowed_html_candidate(url: str) -> bool:
+    return is_manualslib_product_url(url) or is_searspartsdirect_manual_page(url)
+
+
 def derive_filename(url: str, brand: str, model: str) -> str:
     path = urlsplit(url).path
     filename = os.path.basename(path)
@@ -510,133 +304,6 @@ def score_candidate(url: str, title: str, snippet: str, config: BrandConfig, mod
     return score
 
 
-def extract_pdf_features(local_path: str, model: str) -> Optional[Dict[str, Any]]:
-    """Extract keyword signals from the early pages of the PDF to validate its type."""
-    try:
-        reader = PdfReader(local_path)
-    except Exception as exc:  # pylint: disable=broad-except
-        logger.warning("Failed to open PDF for analysis path=%s: %s", local_path, exc)
-        return None
-
-    page_count = len(reader.pages)
-    collected_text: List[str] = []
-    char_budget = 0
-    for page_index, page in enumerate(reader.pages[:MAX_ANALYZED_PAGES]):
-        try:
-            extracted = page.extract_text() or ""
-        except Exception as exc:  # pylint: disable=broad-except
-            logger.debug(
-                "Error extracting text from page %s path=%s: %s", page_index, local_path, exc
-            )
-            continue
-
-        collected_text.append(extracted)
-        char_budget += len(extracted)
-        if char_budget >= MAX_ANALYZED_CHARACTERS:
-            break
-
-    combined_text = " ".join(collected_text).lower()
-    keyword_hits: Dict[str, int] = {}
-    for doc_type, keywords in PDF_KEYWORDS.items():
-        keyword_hits[doc_type] = sum(1 for keyword in keywords if keyword in combined_text)
-
-    marketing_hits = sum(1 for keyword in MARKETING_KEYWORDS if keyword in combined_text)
-    manual_tokens = sum(1 for token in MANUAL_TOKENS if token in combined_text)
-    contains_model = bool(model) and model.lower() in combined_text
-    language_hits: Dict[str, int] = {}
-    for language, keywords in LANGUAGE_KEYWORDS.items():
-        language_hits[language] = sum(1 for keyword in keywords if keyword in combined_text)
-
-    return {
-        "page_count": page_count,
-        "keyword_hits": keyword_hits,
-        "marketing_hits": marketing_hits,
-        "manual_tokens": manual_tokens,
-        "contains_model": contains_model,
-        "text_sample_present": bool(collected_text),
-        "language_hits": language_hits,
-        "fallback_image_manual": False,
-    }
-
-
-def evaluate_pdf_candidate_with_gemini(
-    local_path: str,
-    brand: str,
-    model: str,
-    candidate_doc_type: Optional[str],
-) -> Dict[str, Any]:
-    """Use Gemini yes/no classification while still recording the usual PDF metadata."""
-    extracted_features = extract_pdf_features(local_path, model)
-    if extracted_features is None:
-        return {
-            "accept": False,
-            "reason": "analysis_failed",
-            "resolved_doc_type": None,
-            "features": None,
-        }
-
-    features = dict(extracted_features)
-    features.setdefault("keyword_hits", {})
-    features.setdefault("marketing_hits", 0)
-    features.setdefault("manual_tokens", 0)
-    features.setdefault("contains_model", False)
-    features.setdefault("text_sample_present", False)
-    features.setdefault("language_hits", {})
-    features.setdefault("fallback_image_manual", False)
-
-    page_count = int(features.get("page_count") or 0)
-    features["too_short_for_owner"] = page_count < 4
-
-    if page_count < 4:
-        return {
-            "accept": False,
-            "reason": "owner_manual_too_short",
-            "resolved_doc_type": None,
-            "features": features,
-        }
-
-    excerpt_path, created_excerpt = _build_pdf_excerpt(local_path, GEMINI_PAGE_LIMIT)
-    try:
-        result, response_text = _run_gemini_validation(excerpt_path, brand, model)
-    finally:
-        if created_excerpt:
-            with contextlib.suppress(OSError):
-                os.unlink(excerpt_path)
-
-    features["gemini_model"] = GEMINI_MODEL_NAME
-    features["gemini_page_limit"] = min(GEMINI_PAGE_LIMIT, page_count)
-    features["gemini_response"] = response_text
-
-    if result is None:
-        return {
-            "accept": False,
-            "reason": "gemini_inconclusive",
-            "resolved_doc_type": None,
-            "features": features,
-        }
-
-    features["gemini_answer"] = "yes" if result else "no"
-
-    if not result:
-        return {
-            "accept": False,
-            "reason": "gemini_rejected",
-            "resolved_doc_type": None,
-            "features": features,
-        }
-
-    resolved_doc_type = (candidate_doc_type or "").lower() or "owner"
-    if resolved_doc_type not in ACCEPTABLE_DOC_TYPES:
-        resolved_doc_type = "owner"
-
-    return {
-        "accept": True,
-        "reason": None,
-        "resolved_doc_type": resolved_doc_type,
-        "features": features,
-    }
-
-
 def evaluate_pdf_candidate(
     local_path: str,
     brand: str,
@@ -644,125 +311,16 @@ def evaluate_pdf_candidate(
     candidate_doc_type: Optional[str],
 ) -> Dict[str, Any]:
     """
-    Determine whether the downloaded PDF looks like an acceptable manual and resolve its doc_type.
-
-    Returns analysis dict with accept flag, resolved doc_type, and supporting metadata.
+    The previous heuristics-based PDF analysis has been removed. As long as the file
+    passes structural validation elsewhere, we now accept the candidate immediately.
     """
-    if _gemini_enabled():
-        return evaluate_pdf_candidate_with_gemini(
-            local_path,
-            brand,
-            model,
-            candidate_doc_type,
-        )
-
-    features = extract_pdf_features(local_path, model)
-    if not features:
-        return {
-            "accept": False,
-            "reason": "analysis_failed",
-            "resolved_doc_type": None,
-            "features": None,
-        }
-
-    keyword_hits = features["keyword_hits"]
-    manual_signal = sum(keyword_hits.get(doc_type, 0) for doc_type in ACCEPTABLE_DOC_TYPES)
-    manual_tokens = features["manual_tokens"]
-    marketing_hits = features["marketing_hits"]
-    page_count = features["page_count"]
-    language_hits = features.get("language_hits", {})
-    english_hits = language_hits.get("english", 0)
-    spanish_hits = language_hits.get("spanish", 0)
-    # Heuristic to avoid counting promo / non owners-manual PDFs incorrectly.
-    features["too_short_for_owner"] = page_count < 4
-
-    candidate_doc_type_normalized = (candidate_doc_type or "").lower() or None
-    resolved_doc_type = candidate_doc_type_normalized or "owner"
-    top_doc_type, top_hits = max(
-        keyword_hits.items(), key=lambda item: item[1], default=(resolved_doc_type, 0)
-    )
-    disallowed_hit_total = sum(
-        keyword_hits.get(doc_type, 0) for doc_type in DISALLOWED_DOC_TYPES
-    )
-
-    if top_hits > 0:
-        if top_doc_type in DISALLOWED_DOC_TYPES:
-            resolved_doc_type = top_doc_type
-        elif top_doc_type in ACCEPTABLE_DOC_TYPES:
-            resolved_doc_type = top_doc_type
-
-    if (
-        resolved_doc_type not in ACCEPTABLE_DOC_TYPES
-        and resolved_doc_type not in DISALLOWED_DOC_TYPES
-        and keyword_hits.get("owner")
-        and disallowed_hit_total == 0
-    ):
-        resolved_doc_type = "owner"
-
-    has_manual_tokens = manual_tokens > 0
-    accept = resolved_doc_type in ACCEPTABLE_DOC_TYPES and (
-        manual_signal > 0
-        or (resolved_doc_type == "owner" and has_manual_tokens)
-    )
-    reason = None
-
-    if resolved_doc_type not in ACCEPTABLE_DOC_TYPES:
-        accept = False
-        reason = f"disallowed_doc_type:{resolved_doc_type}"
-    elif resolved_doc_type == "owner" and page_count < 4:
-        accept = False
-        reason = "owner_manual_too_short"
-    elif manual_signal == 0 and not (resolved_doc_type == "owner" and has_manual_tokens):
-        accept = False
-        reason = "no_manual_keywords"
-    elif marketing_hits and keyword_hits.get("owner", 0) == 0:
-        accept = False
-        reason = "marketing_signals"
-    elif page_count <= 2 and keyword_hits.get("owner", 0) == 0:
-        accept = False
-        reason = "insufficient_pages"
-    elif english_hits == 0 and spanish_hits > 0:
-        accept = False
-        reason = "non_english_content"
-    elif spanish_hits >= max(3, english_hits * 2):
-        accept = False
-        reason = "non_english_content"
-
-    if (
-        not accept
-        and reason == "no_manual_keywords"
-        and not features["text_sample_present"]
-        and page_count >= 5
-    ):
-        # Fallback for image-only manuals lacking extractable text but long enough to be plausible.
-        resolved_doc_type = (
-            resolved_doc_type if resolved_doc_type in ACCEPTABLE_DOC_TYPES else "owner"
-        )
-        accept = True
-        reason = None
-        features["fallback_image_manual"] = True
-
-    analysis = {
-        "accept": accept,
-        "reason": reason,
-        "resolved_doc_type": resolved_doc_type if accept else None,
-        "features": features,
+    resolved_doc_type = (candidate_doc_type or "owner").lower()
+    return {
+        "accept": True,
+        "reason": None,
+        "resolved_doc_type": resolved_doc_type,
+        "features": None,
     }
-
-    logger.info(
-        "PDF analysis path=%s doc_type=%s accept=%s manual_signal=%s manual_tokens=%s marketing_hits=%s page_count=%s contains_model=%s",
-        local_path,
-        analysis["resolved_doc_type"] or resolved_doc_type,
-        analysis["accept"],
-        manual_signal,
-        manual_tokens,
-        marketing_hits,
-        page_count,
-        features["contains_model"],
-    )
-    if not accept and reason:
-        logger.info("Rejecting PDF path=%s reason=%s", local_path, reason)
-    return analysis
 
 
 def build_candidate_dict(
@@ -791,6 +349,7 @@ def build_candidate_dict(
     return candidate
 
 
+# A candidate is a search result URL for a given model & appliance search query.
 def collect_candidates(
     payload: Dict[str, Any],
     config: BrandConfig,
@@ -806,11 +365,15 @@ def collect_candidates(
         search_id or "unknown",
     )
 
-    for result in payload.get("organic_results", []) or []:
+    organic_results = payload.get("organic_results")
+    if organic_results is None:
+        organic_results = payload.get("organic")
+    for result in organic_results or []:
         url = result.get("link") or result.get("redirect_link")
         if not url or url in seen_urls:
             continue
-        if not is_probable_pdf(url) and not is_manualslib_product_url(url):
+        if not is_probable_pdf(url) and not is_allowed_html_candidate(url):
+            logger.debug("Skipping candidate due to non-supported HTML url=%s", url)
             continue
         if is_disallowed_locale_url(url):
             logger.debug("Skipping candidate due to disallowed locale url=%s", url)
@@ -840,7 +403,10 @@ def collect_candidates(
             candidates[-1]["score"],
         )
 
-    for item in payload.get("inline_images", []) or []:
+    inline_images = payload.get("inline_images")
+    if inline_images is None:
+        inline_images = payload.get("inlineImages")
+    for item in inline_images or []:
         url = item.get("source")
         if not url or url in seen_urls:
             continue
@@ -1014,6 +580,29 @@ def download_pdf(url: str, temp_dir: str, *, brand: str, model: str) -> Optional
         session.close()
 
 
+def download_manualslib_candidate(
+    product_url: str,
+    download_dir: str,
+) -> Optional[ManualslibDownload]:
+    """
+    Wrapper around download_manual_from_product_page with logging/guards so the orchestrator
+    can treat ManualsLib URLs as first-class candidates.
+    """
+
+    if not product_url or not is_manualslib_product_url(product_url):
+        return None
+
+    logger.info("Detected ManualsLib candidate url=%s", product_url)
+    try:
+        return download_manual_from_product_page(
+            product_url,
+            download_dir=download_dir,
+        )
+    except Exception as exc:  # pylint: disable=broad-except
+        logger.exception("ManualsLib download failed for url=%s: %s", product_url, exc)
+        return None
+
+
 def attempt_candidate(candidate: Dict[str, Any], *, brand: str, model: str) -> Optional[PdfResult]:
     logger.info(
         "Attempting candidate url=%s score=%s source=%s",
@@ -1028,21 +617,35 @@ def attempt_candidate(candidate: Dict[str, Any], *, brand: str, model: str) -> O
     temp_dir = create_temp_download_dir()
     try:
         manualslib_download: Optional[ManualslibDownload] = None
+        searspartsdirect_download: Optional[SearsPartsDirectDownload] = None
         candidate_url = candidate.get("url") or ""
 
-        if candidate_url and is_manualslib_product_url(candidate_url):
-            logger.info("Detected ManualsLib candidate url=%s", candidate_url)
-            manualslib_download = download_manual_from_product_page(
-                candidate_url,
-                download_dir=temp_dir,
-            )
-            if not manualslib_download:
+        if candidate_url:
+            if is_searspartsdirect_manual_page(candidate_url):
+                searspartsdirect_download = download_searspartsdirect_from_page(
+                    candidate_url,
+                    download_dir=temp_dir,
+                )
+                if not searspartsdirect_download:
+                    cleanup_temp_dir(temp_dir)
+                    return None
+            manualslib_download = download_manualslib_candidate(candidate_url, temp_dir)
+            if not manualslib_download and is_manualslib_product_url(candidate_url):
                 cleanup_temp_dir(temp_dir)
                 return None
+
+
+        if searspartsdirect_download:
+            local_path = searspartsdirect_download.pdf_path
+            file_url = searspartsdirect_download.download_url
+            source_url = searspartsdirect_download.product_url
+        elif manualslib_download:
             local_path = manualslib_download.pdf_path
             file_url = manualslib_download.download_url
             source_url = manualslib_download.manual_page_url
         else:
+            # Neither headless path succeeded, so fetch the candidate URL directly once.
+            # This fallback is the only network (requests library) download attempted when both scrapers fail.
             local_path = download_pdf(candidate["url"], temp_dir, brand=brand, model=model)
             if not local_path:
                 cleanup_temp_dir(temp_dir)
@@ -1093,6 +696,13 @@ def attempt_candidate(candidate: Dict[str, Any], *, brand: str, model: str) -> O
                     "manualslib_download_url": manualslib_download.download_url,
                 }
             )
+        if searspartsdirect_download:
+            result["serpapi_metadata"].update(
+                {
+                    "searspartsdirect_product_url": searspartsdirect_download.product_url,
+                    "searspartsdirect_download_url": searspartsdirect_download.download_url,
+                }
+            )
         logger.info(
             "Validation passed for candidate url=%s doc_type=%s score=%s",
             candidate.get("url"),
@@ -1115,12 +725,14 @@ def fetch_manual_with_serpapi(
     model: str,
     *,
     client: Optional[SerpApiClient] = None,
+    fallback_query_provider: Optional[FallbackQueryProvider] = None,
 ) -> Optional[PdfResult]:
     """
     Attempt to fetch a manual via SerpApi for the provided brand/model.
 
     Returns a result dict compatible with validate_and_ingest_manual or None if no
-    suitable PDF was found.
+    suitable PDF was found. Provide fallback_query_provider to inject additional
+    progressive search strings when the primary set yields no candidates.
     """
     logger.info("Starting SerpApi fetch brand=%s model=%s", brand, model)
     try:
@@ -1131,63 +743,130 @@ def fetch_manual_with_serpapi(
 
     brand_lower = (brand or "").lower()
     config = get_brand_config(brand_lower)
-    queries = build_queries(config, model)
-    if not queries:
+    query_plan = build_scraper_query_plan(config, model)
+    if not query_plan:
         logger.warning(
-            "No SerpApi queries constructed for brand=%s model=%s", brand, model
+            "No SerpApi query stages constructed for brand=%s model=%s", brand, model
         )
         return None
 
     seen_urls: set = set()
-    logger.debug(
-        "Constructed SerpApi queries for brand=%s model=%s: %s",
-        brand,
-        model,
-        queries,
-    )
-    logger.info(
-        "Executing %d SerpApi querie(s) for brand=%s model=%s",
-        len(queries),
-        brand,
-        model,
-    )
+    fallback_provider = fallback_query_provider or default_fallback_query_provider
 
-    for index, query in enumerate(queries, start=1):
-        logger.info("SerpApi query %d/%d: %s", index, len(queries), query)
-        try:
-            payload = serpapi_client.search(query)
-        except SerpApiQuotaError:
-            logger.error("SerpApi quota exceeded during query=%s", query)
-            raise
-        except SerpApiError as exc:
-            logger.warning("SerpApi search error for query=%s: %s", query, exc)
-            continue
+    def run_query_batch(
+        queries_to_try: List[str],
+        *,
+        batch_label: str,
+    ) -> Tuple[Optional[PdfResult], bool]:
+        had_candidates = False
+        if not queries_to_try:
+            return None, False
 
-        candidates = collect_candidates(payload, config, model, query, seen_urls)
-        if not candidates:
-            logger.info("No PDF candidates returned for query=%s", query)
-            continue
+        for index, query in enumerate(queries_to_try, start=1):
+            logger.info("%s query %d/%d: %s", batch_label, index, len(queries_to_try), query)
+            try:
+                payload = serpapi_client.search(query)
+            except SerpApiQuotaError:
+                logger.error("SerpApi quota exceeded during query=%s", query)
+                raise
+            except SerpApiError as exc:
+                logger.warning("SerpApi search error for query=%s: %s", query, exc)
+                continue
 
-        # Sort by descending score to try the most promising PDFs first.
-        candidates.sort(key=lambda item: item.get("score", 0), reverse=True)
-        for candidate in candidates[:5]:
-            result = attempt_candidate(candidate, brand=brand_lower, model=model)
-            if result:
+            candidates = collect_candidates(payload, config, model, query, seen_urls)
+            if not candidates:
+                logger.info("No PDF candidates returned for query=%s", query)
+                continue
+
+            had_candidates = True
+            candidates.sort(key=lambda item: item.get("score", 0), reverse=True)
+            for candidate in candidates[:5]:
+                result = attempt_candidate(candidate, brand=brand_lower, model=model)
+                if result:
+                    logger.info(
+                        "Candidate accepted url=%s brand=%s model=%s (batch=%s)",
+                        candidate.get("url"),
+                        brand,
+                        model,
+                        batch_label,
+                    )
+                    return result, True
                 logger.info(
-                    "Candidate accepted url=%s brand=%s model=%s",
+                    "Candidate rejected after validation url=%s brand=%s model=%s (batch=%s)",
                     candidate.get("url"),
                     brand,
                     model,
+                    batch_label,
                 )
-                return result
-            logger.info(
-                "Candidate rejected after validation url=%s brand=%s model=%s",
-                candidate.get("url"),
-                brand,
-                model,
-            )
 
-    logger.info("No valid SerpApi manual found for brand=%s model=%s", brand, model)
+        return None, had_candidates
+
+    stage_names = [stage.name for stage, _ in query_plan]
+    logger.debug(
+        "Constructed SerpApi query stages for brand=%s model=%s: %s",
+        brand,
+        model,
+        stage_names,
+    )
+
+    primary_candidates_found = False
+    for stage, queries in query_plan:
+        if not queries:
+            continue
+        logger.info(
+            "Executing %d SerpApi querie(s) for stage=%s brand=%s model=%s",
+            len(queries),
+            stage.name,
+            brand,
+            model,
+        )
+        stage_result, stage_candidates_found = run_query_batch(
+            queries,
+            batch_label=f"{stage.name.title()}",
+        )
+        if stage_result:
+            return stage_result
+        primary_candidates_found = primary_candidates_found or stage_candidates_found
+
+    fallback_reason = (
+        "returned candidates but none were valid"
+        if primary_candidates_found
+        else "returned no candidates"
+    )
+    fallback_queries = fallback_provider(config, model) if fallback_provider else []
+    if not fallback_queries:
+        logger.info(
+            "Primary SerpApi search %s and no fallback queries were provided for brand=%s model=%s",
+            fallback_reason,
+            brand,
+            model,
+        )
+        return None
+
+    logger.info(
+        "Primary SerpApi search %s; executing %d fallback querie(s)",
+        fallback_reason,
+        len(fallback_queries),
+    )
+    fallback_result, fallback_candidates_found = run_query_batch(
+        fallback_queries,
+        batch_label="Fallback",
+    )
+    if fallback_result:
+        return fallback_result
+
+    if fallback_candidates_found:
+        logger.info(
+            "Fallback SerpApi queries found candidates but none were valid for brand=%s model=%s",
+            brand,
+            model,
+        )
+    else:
+        logger.info(
+            "Fallback SerpApi queries returned no candidates for brand=%s model=%s",
+            brand,
+            model,
+        )
     return None
 
 
