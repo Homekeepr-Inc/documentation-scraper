@@ -23,9 +23,8 @@ from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.support.ui import WebDriverWait
 
 from ai_utils import (
-    ask_recaptcha_instructions_to_gemini,
     ask_if_tile_contains_object_gemini,
-    ask_text_to_gemini
+    ask_recaptcha_instructions_to_gemini,
 )
 
 
@@ -36,13 +35,16 @@ class CaptchaSolver:
     def __init__(self, driver, model='gemini-2.5-pro'):
         self.driver = driver
         self.model = model
-        self.screenshot_dir = 'headless-browser-scraper/screenshots'
-        self.success_dir = 'headless-browser-scraper/successful_solves'
+        self.screenshot_dir = "headless-browser-scraper/screenshots"
+        self.success_dir = "headless-browser-scraper/successful_solves"
         os.makedirs(self.screenshot_dir, exist_ok=True)
         os.makedirs(self.success_dir, exist_ok=True)
         self.logger = logging.getLogger("headless.captcha_solver")
 
-    def detect_type(self):
+    # ------------------------------------------------------------------ #
+    # Detection
+    # ------------------------------------------------------------------ #
+    def detect_type(self) -> Optional[str]:
         selectors = [
             (By.CSS_SELECTOR, "#rc-anchor-container", "#rc-anchor-container"),
             (By.CSS_SELECTOR, ".recaptcha-checkbox", ".recaptcha-checkbox"),
@@ -51,7 +53,7 @@ class CaptchaSolver:
             (By.ID, "recaptcha-anchor", "recaptcha-anchor"),
         ]
 
-        def _check_current_context():
+        def _check_current_context() -> Optional[str]:
             for by, value, label in selectors:
                 try:
                     elements = self.driver.find_elements(by, value)
@@ -70,7 +72,7 @@ class CaptchaSolver:
             match = _check_current_context()
             if match:
                 self.logger.info("Detected reCAPTCHA v2 via selector %s", match)
-                return 'recaptcha_v2'
+                return "recaptcha_v2"
 
             iframes = self.driver.find_elements(By.TAG_NAME, "iframe")
             self.logger.debug("Scanning %d iframe(s) for reCAPTCHA", len(iframes))
@@ -82,7 +84,7 @@ class CaptchaSolver:
                         self.logger.info(
                             "Detected reCAPTCHA v2 in iframe[%d] via selector %s", idx, match
                         )
-                        return 'recaptcha_v2'
+                        return "recaptcha_v2"
                 except Exception as exc:  # pylint: disable=broad-except
                     self.logger.debug("Error inspecting iframe[%d]: %s", idx, exc)
                 finally:
@@ -804,8 +806,7 @@ class CaptchaSolver:
     def _parse_instruction_text(self, instruction_text):
         if not instruction_text:
             return None
-        lower = instruction_text.lower()
-        lower = lower.replace("\n", " ")
+        lower = instruction_text.lower().replace("\n", " ")
         patterns = [
             r"select all (?:squares|images) (?:that )?contain(?: a| an)? ([^\.]+)",
             r"select all (?:squares|images) with ([^\.]+)",
@@ -826,7 +827,7 @@ class CaptchaSolver:
             return "skip"
         return None
 
-    def _click_skip_button(self):
+    def _click_skip_button(self) -> None:
         try:
             skip_button = WebDriverWait(self.driver, 3).until(
                 EC.element_to_be_clickable((By.ID, "recaptcha-reload-button"))
@@ -835,29 +836,55 @@ class CaptchaSolver:
         except Exception as exc:  # pylint: disable=broad-except
             self.logger.debug("Skip button click failed: %s", exc)
 
-    def _take_screenshot(self, name):
-        path = os.path.join(self.screenshot_dir, f"{name}.png")
-        self.driver.save_screenshot(path)
-        return path
+    def _prepare_image_for_llm(self, image_path: str, suffix: str = "processed") -> str:
+        """Downscale and convert screenshots for faster LLM uploads."""
+        try:
+            with Image.open(image_path) as img:
+                max_dim = 512
+                if max(img.size) > max_dim:
+                    img.thumbnail((max_dim, max_dim))
+                optimized_path = os.path.splitext(image_path)[0] + f"_{suffix}.jpg"
+                img.convert("RGB").save(optimized_path, format="JPEG", quality=85)
+                return optimized_path
+        except Exception as exc:  # pylint: disable=broad-except
+            self.logger.debug(
+                "Unable to optimize image %s for LLM consumption: %s",
+                image_path,
+                exc,
+            )
+            return image_path
 
-    def _create_success_gif(self, image_paths, success=True):
+    def _create_success_gif(self, image_paths: Iterable[str], success: bool = True) -> None:
+        image_paths = list(image_paths)
         if not image_paths:
             return
-        valid_images = [Image.open(p).convert("RGB") for p in image_paths if os.path.exists(p)]
+
+        valid_images = [
+            Image.open(path).convert("RGB")
+            for path in image_paths
+            if os.path.exists(path)
+        ]
         if not valid_images:
             return
-        # Resize to max size
-        max_w, max_h = max(img.width for img in valid_images), max(img.height for img in valid_images)
+
+        max_width = max(img.width for img in valid_images)
+        max_height = max(img.height for img in valid_images)
         processed = []
         for img in valid_images:
-            canvas = Image.new('RGB', (max_w, max_h), (255, 255, 255))
-            pos = ((max_w - img.width) // 2, (max_h - img.height) // 2)
+            canvas = Image.new("RGB", (max_width, max_height), (255, 255, 255))
+            pos = ((max_width - img.width) // 2, (max_height - img.height) // 2)
             canvas.paste(img, pos)
             processed.append(canvas)
+
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        output = os.path.join(self.success_dir, f"recaptcha_{'success' if success else 'fail'}_{timestamp}.gif")
-        processed[0].save(output, save_all=True, append_images=processed[1:], duration=800, loop=0)
-        if success:
-            self.logger.info("Captured successful reCAPTCHA solve GIF at %s", output)
-        else:
-            self.logger.info("Captured failed reCAPTCHA solve GIF at %s", output)
+        status = "success" if success else "fail"
+        output = os.path.join(
+            self.success_dir, f"recaptcha_{status}_{timestamp}.gif"
+        )
+        processed[0].save(
+            output,
+            save_all=True,
+            append_images=processed[1:],
+            duration=800,
+            loop=0,
+        )
