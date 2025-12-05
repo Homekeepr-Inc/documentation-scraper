@@ -32,6 +32,37 @@
             health_uri /health
             health_interval 2s
             fail_duration 30s
+     }
+ }
+
+outbound.homekeepr.co {
+    {$TLS_DIRECTIVE}
+
+    log {
+        output file /var/log/caddy/outbound_access.log {
+            roll_size 20mb
+            roll_keep 5
+            roll_keep_for 168h
+        }
+        format json
+    }
+
+    # Rate limiting to prevent abuse
+    rate_limit {
+        zone static {
+            key {remote}
+            window 1m
+            burst 100
         }
     }
+
+    # Security headers
+    header_up X-Frame-Options DENY
+    header_up X-Content-Type-Options nosniff
+    header_up Referrer-Policy strict-origin-when-cross-origin
+    header_up Content-Security-Policy "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'"
+
+    # Reverse proxy to local service on port 4000
+    reverse_proxy localhost:4000
+}
 }
