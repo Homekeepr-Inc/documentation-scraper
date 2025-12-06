@@ -34,6 +34,7 @@
             fail_duration 30s
      }
  }
+}
 
 outbound.homekeepr.co {
     {$TLS_DIRECTIVE}
@@ -64,5 +65,4 @@ outbound.homekeepr.co {
 
     # Reverse proxy to local service on port 4000
     reverse_proxy app:4000
-}
 }
