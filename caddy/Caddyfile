@@ -63,6 +63,6 @@ outbound.homekeepr.co {
     header_up Content-Security-Policy "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'"
 
     # Reverse proxy to local service on port 4000
-    reverse_proxy localhost:4000
+    reverse_proxy app:4000
 }
 }
