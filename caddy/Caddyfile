@@ -48,12 +48,6 @@ outbound.homekeepr.co {
         format json
     }
 
-    # Security headers
-    header_up X-Frame-Options DENY
-    header_up X-Content-Type-Options nosniff
-    header_up Referrer-Policy strict-origin-when-cross-origin
-    header_up Content-Security-Policy "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'"
-
     # Reverse proxy to local service on port 4000
     reverse_proxy app:4000
 }
