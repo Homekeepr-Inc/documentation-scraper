@@ -48,15 +48,6 @@ outbound.homekeepr.co {
         format json
     }
 
-    # Rate limiting to prevent abuse
-    rate_limit {
-        zone static {
-            key {remote}
-            window 1m
-            burst 100
-        }
-    }
-
     # Security headers
     header_up X-Frame-Options DENY
     header_up X-Content-Type-Options nosniff
