@@ -7,6 +7,15 @@
 {$DOMAIN_NAME} {
     {$TLS_DIRECTIVE}
 
+    tls {
+        client_auth {
+            mode require_and_verify
+            trust_pool file {
+                pem_file cloudflare.pem
+            }
+        }
+    }
+
     log {
         output file /var/log/caddy/access.log {
             roll_size 20mb
@@ -38,6 +47,15 @@
 
 outbound.homekeepr.co {
     {$TLS_DIRECTIVE}
+
+    tls {
+        client_auth {
+            mode require_and_verify
+            trust_pool file {
+                pem_file cloudflare.pem
+            }
+        }
+    }
 
     log {
         output file /var/log/caddy/outbound_access.log {
