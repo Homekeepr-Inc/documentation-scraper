@@ -26,6 +26,7 @@ services:
     depends_on:
       - squid-proxy-a
       - squid-proxy-b
+    restart: unless-stopped
     deploy:
       replicas: 4  # Scale to multiple instances for parallelism
 
@@ -35,6 +36,7 @@ services:
       - .env
     environment:
       - UPSTREAM_PROXY_URLS=${PROXY_A_PUBLIC_URL:-}
+    restart: unless-stopped
     networks:
       - app_network
 
@@ -44,6 +46,7 @@ services:
       - .env
     environment:
       - UPSTREAM_PROXY_URLS=${PROXY_B_PUBLIC_URL:-}
+    restart: unless-stopped
     networks:
       - app_network
 
@@ -58,6 +61,7 @@ services:
     volumes:
       - ./caddy:/etc/caddy
       - ./caddy/logs:/var/log/caddy
+    restart: unless-stopped
     networks:
       - app_network
 
