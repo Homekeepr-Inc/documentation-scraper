@@ -1,3 +1,28 @@
+# Compose stack for documentation-scraper service.
+#
+# Network Architecture:
+# ---------------------
+# This service uses two networks for security isolation:
+#
+# 1. "internal" (bridge) - For intra-service communication only
+#    - squid-proxy-a and squid-proxy-b ONLY connect here
+#    - Not reachable from outside this compose stack
+#    - Keeps proxy infrastructure isolated from external access
+#
+# 2. "documentation-scraper-network" (external) - For Caddy reverse proxy access
+#    - Created externally: `docker network create documentation-scraper-network`
+#    - Only the "app" service connects here (in addition to internal)
+#    - Caddy (in VPS-Infra-Services) also connects to route external traffic
+#    - Other services (homekeepr-outbound, temporal-jobs) CANNOT reach this network
+#
+# This ensures:
+# - Squid proxies are never directly reachable from Caddy or other services
+# - Only the app containers are exposed to the reverse proxy
+# - Services in different repos are isolated from each other
+#
+# Note: With replicas: 4, containers are named documentation-scraper-app-1 through
+# documentation-scraper-app-4, which Caddy load balances across.
+#
 services:
   app:
     build: .
@@ -22,7 +47,8 @@ services:
       retries: 3
       start_period: 40s
     networks:
-      - app_network
+      - internal                          # Can reach squid proxies
+      - documentation-scraper-network     # Reachable by Caddy reverse proxy
     depends_on:
       - squid-proxy-a
       - squid-proxy-b
@@ -36,7 +62,7 @@ services:
     environment:
       - UPSTREAM_PROXY_URLS=${PROXY_A_PUBLIC_URL:-}
     networks:
-      - app_network
+      - internal                # Internal only - not reachable from Caddy
 
   squid-proxy-b:
     build: ./squid
@@ -45,25 +71,13 @@ services:
     environment:
       - UPSTREAM_PROXY_URLS=${PROXY_B_PUBLIC_URL:-}
     networks:
-      - app_network
-
-  caddy:
-    image: caddy:2
-    environment:
-      - DOMAIN_NAME=${DOMAIN_NAME:-api.homekeepr.co}
-      - TLS_DIRECTIVE=${TLS_DIRECTIVE:-tls /etc/caddy/cert.pem /etc/caddy/key.pem}
-    working_dir: /etc/caddy
-    ports:
-      - "443:443"
-    volumes:
-      - ./caddy:/etc/caddy
-      - ./caddy/logs:/var/log/caddy
-    networks:
-      - app_network
+      - internal                # Internal only - not reachable from Caddy
 
 networks:
-  app_network:
-    driver: bridge
+  internal:
+    driver: bridge              # Private network for app <-> squid communication
+  documentation-scraper-network:
+    external: true              # Shared with Caddy in VPS-Infra-Services for reverse proxy
 
 volumes:
   manuals_data:
