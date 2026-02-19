@@ -1,12 +1,14 @@
 import logging
+import re
 import sys
 import os
 import shutil
+import tempfile
 import threading
 from queue import Queue
 from typing import Optional, Tuple
 
-from fastapi import FastAPI, HTTPException, Request, Response
+from fastapi import FastAPI, HTTPException, Request, Response, UploadFile, File
 from fastapi.responses import FileResponse, PlainTextResponse, HTMLResponse
 from fastapi.templating import Jinja2Templates
 from starlette.responses import JSONResponse
@@ -55,6 +57,18 @@ logger = logging.getLogger("serpapi.api")
 SCRAPER_SECRET = os.getenv("SCRAPER_SECRET")
 if SCRAPER_SECRET == None or SCRAPER_SECRET == "":
     raise ValueError("**Security Violation**: SCRAPER_SECRET is an empty string or null!")
+
+# Separate secret for the /ingest endpoint (admin manual uploads).
+# Not fatal if missing — the endpoint is simply disabled.
+SCRAPER_INGEST_SECRET = os.getenv("SCRAPER_INGEST_SECRET", "")
+if not SCRAPER_INGEST_SECRET:
+    logging.getLogger("serpapi.api").warning("SCRAPER_INGEST_SECRET not set; /ingest endpoint is disabled")
+
+# Path segment allowlist for brand/model to prevent path traversal (A03)
+SAFE_PATH_SEGMENT = re.compile(r'^[a-zA-Z0-9_.\-]+$')
+
+# Max upload size for manual ingest (50MB)
+MAX_INGEST_SIZE = 50 * 1024 * 1024
 
 # Toggle to enable/disable SerpApi globally. Default to enabled.
 SERPAPI_ENABLED = os.getenv("SERPAPI_ENABLED", "true").strip().lower() not in {"false", "0", "no", ""}
@@ -130,8 +144,9 @@ async def log_request_arrival(request: Request, call_next):
 
 @app.middleware("http")
 async def check_custom_header(request: Request, call_next):
-    # Bypass header check for health check endpoints (internal)
-    if request.url.path in ["/health", "/status"]:
+    # Bypass header check for health, status, and /ingest endpoints.
+    # /ingest has its own auth (SCRAPER_INGEST_SECRET) checked in the handler.
+    if request.url.path in ["/health", "/status"] or request.url.path.startswith("/ingest"):
         response = await call_next(request)
         return response
     header_value = request.headers.get("X-Homekeepr-Scraper")
@@ -149,6 +164,91 @@ def _startup() -> None:
 @app.get("/health")
 def health() -> dict:
     return {"status": "ok"}
+
+
+@app.post("/ingest/{brand}/{model:path}")
+async def ingest_manual_upload(brand: str, model: str, request: Request, file: UploadFile = File(...)):
+    """Accept a PDF upload from the admin portal and insert it into the scraper's
+    SQLite database. The next GET /scrape/{brand}/{model} call will find it in
+    the cache and return it immediately — no web scraping needed.
+
+    Auth: requires X-Homekeepr-Ingest header with the SCRAPER_INGEST_SECRET.
+    This is separate from the general X-Homekeepr-Scraper secret.
+    """
+    # Auth — disabled if SCRAPER_INGEST_SECRET is not configured
+    if not SCRAPER_INGEST_SECRET:
+        raise HTTPException(status_code=404, detail="Not found")
+    ingest_header = request.headers.get("X-Homekeepr-Ingest") or ""
+    if ingest_header != SCRAPER_INGEST_SECRET:
+        raise HTTPException(status_code=401, detail="Unauthorized")
+
+    # Sanitize brand and model to prevent path traversal (A03)
+    brand = brand.lower().strip()
+    normalized_model = normalize_model(model).strip()
+    if not SAFE_PATH_SEGMENT.match(brand):
+        raise HTTPException(status_code=400, detail="Invalid brand")
+    if not SAFE_PATH_SEGMENT.match(normalized_model):
+        raise HTTPException(status_code=400, detail="Invalid model")
+
+    # Validate file presence
+    if not file or not file.filename:
+        raise HTTPException(status_code=400, detail="file is required")
+
+    # Read file with size limit enforcement
+    contents = await file.read(MAX_INGEST_SIZE + 1)
+    if len(contents) > MAX_INGEST_SIZE:
+        raise HTTPException(status_code=413, detail="File too large (max 50MB)")
+
+    # Validate PDF magic bytes
+    if not contents[:5].startswith(b'%PDF-'):
+        raise HTTPException(status_code=400, detail="Invalid PDF file")
+
+    # Write to temp file for the existing ingestion pipeline
+    temp_dir = None
+    try:
+        temp_dir = tempfile.mkdtemp(prefix="ingest_upload_")
+        temp_pdf_path = os.path.join(temp_dir, f"{brand}_{normalized_model}_manual.pdf")
+        with open(temp_pdf_path, 'wb') as f:
+            f.write(contents)
+
+        result_dict = {
+            "brand": brand,
+            "model_number": normalized_model,
+            "doc_type": "owner",
+            "title": f"{brand} {normalized_model} Owner's Manual (admin upload)",
+            "source_url": "admin_upload",
+            "file_url": "admin_upload",
+            "local_path": temp_pdf_path,
+        }
+
+        ingest_result = validate_and_ingest_manual(result_dict)
+        if not ingest_result or not ingest_result.id:
+            raise HTTPException(status_code=500, detail="Failed to ingest document")
+
+        # Verify the resolved storage path is under BLOB_ROOT (A03 defense in depth)
+        from .config import BLOB_ROOT
+        doc = fetch_document(ingest_result.id)
+        if doc and doc.get("local_path"):
+            from pathlib import Path
+            resolved = Path(doc["local_path"]).resolve()
+            if not str(resolved).startswith(str(BLOB_ROOT.resolve())):
+                logger.error(f"Path traversal detected: {resolved} is outside {BLOB_ROOT}")
+                raise HTTPException(status_code=400, detail="Invalid path")
+
+        logger.info(f"Admin ingest: brand={brand} model={normalized_model} doc_id={ingest_result.id}")
+
+        return JSONResponse(content={
+            "id": ingest_result.id,
+            "sha256": ingest_result.sha256,
+            "pages": ingest_result.pages,
+            "size_bytes": ingest_result.size_bytes,
+            "english_present": ingest_result.english_present,
+        })
+
+    finally:
+        # Clean up temp directory
+        if temp_dir and os.path.exists(temp_dir):
+            shutil.rmtree(temp_dir, ignore_errors=True)
 
 
 @app.get("/status")
