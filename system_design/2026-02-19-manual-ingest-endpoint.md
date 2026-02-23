@@ -1,7 +1,9 @@
 # Manual Ingest Endpoint
 
 **Date:** 2026-02-19
+
 **Scope:** documentation-scraper repo — one new endpoint in `app/main.py`
+
 **Companion doc:** `temporal-jobs/system_design/2026-02-19-scrape-retry-self-healing.md`
 
 ---
@@ -37,10 +39,10 @@ async def ingest_manual_upload(brand: str, model: str, file: UploadFile):
 
 ### Steps
 
-1. **Validate inputs** — brand is lowercased, model is normalized with `normalize_model()` (replaces `/` with `_`), file must be present
-2. **Check for existing document** — query SQLite for `(brand, model_number, doc_type='owner')`. If it already exists, return the existing document metadata (same dedup behavior as `ingest_from_local_path`)
-3. **Save PDF to temp file** — write the upload to a temp file via `create_temp_download_dir()` / `cleanup_temp_dir()` (existing helpers in `utils.py`)
-4. **Validate PDF** — call `validate_pdf_file()` (existing helper) to confirm it's a real PDF (checks `%PDF-` magic bytes). Reject with 400 if invalid.
+1. **Validate inputs** — brand is lowercased and validated with `sanitize_path_segment(..., allow_spaces=False)`. The raw model is checked with `ensure_no_traversal()` (rejects absolute paths, `..`, empty segments, backslashes, null bytes). The normalized model replaces `/` and `\` with `_`, then is validated with `sanitize_path_segment(..., allow_spaces=True)`. This allows models like `SHV78CM3N/28` and `WM4080HBA/ 03` while blocking traversal.
+2. **Validate file presence + size** — file must be present and under 50MB (both header check and read-time check).
+3. **Validate PDF** — check `%PDF-` magic bytes and reject invalid files with 400.
+4. **Save PDF to temp file** — write the upload to a temp file via `tempfile.mkdtemp()`.
 5. **Ingest** — call `validate_and_ingest_manual()` with a result dict:
    ```python
    result = {
@@ -54,14 +56,15 @@ async def ingest_manual_upload(brand: str, model: str, file: UploadFile):
    }
    ```
    This reuses the existing ingestion pipeline: hashes the PDF, extracts text, detects language, writes to blob storage (`paths_for`), inserts into SQLite via `insert_or_ignore_document`.
-6. **Clean up temp file** — `cleanup_temp_dir()`
-7. **Return** — 200 with the document metadata (id, sha256, pages, size_bytes, english_present)
+6. **Verify storage path** — after ingest, check that the stored `local_path` is under `BLOB_ROOT` via `is_within_blob_root()`. Reject with 400 if not.
+7. **Clean up temp file** — remove the temp directory.
+8. **Return** — 200 with the document metadata (id, sha256, pages, size_bytes, english_present)
 
 ### Auth
 
 The `/ingest` endpoint requires a **separate secret** from the scraper's general `X-Homekeepr-Scraper` header. This endpoint must only be callable by the temporal-jobs admin API, not by anything that happens to know the scraper secret.
 
-**`X-Homekeepr-Ingest` header** — a dedicated secret loaded from `SCRAPER_INGEST_SECRET` env var. The `/ingest` endpoint bypasses the general `X-Homekeepr-Scraper` middleware and checks only `X-Homekeepr-Ingest`. The two secrets are completely independent — knowing one doesn't help with the other.
+**`X-Homekeepr-Ingest` header** — a dedicated secret loaded from `SCRAPER_INGEST_SECRET` env var. The `/ingest` endpoint bypasses the general `X-Homekeepr-Scraper` middleware and checks only `X-Homekeepr-Ingest`.
 
 The existing `check_custom_header` middleware is updated to skip `/ingest` paths (same as it skips `/health` and `/status`). The endpoint handler checks `X-Homekeepr-Ingest` itself.
 
@@ -100,33 +103,24 @@ The temporal-jobs admin API sends this header when proxying uploads to the scrap
 
 **A03 — Path traversal in file storage:**
 
-`paths_for()` builds a filesystem path from brand + model: `BLOB_ROOT / category / brand / model / doc_type`. Python's `pathlib` `/` operator does not sanitize `..`. If brand or model contains `../../`, files get written outside `BLOB_ROOT`.
+`paths_for()` builds a filesystem path from brand + model: `BLOB_ROOT / category / brand / model / doc_type`. Python's `pathlib` `/` operator does not sanitize `..`.
 
-Mitigation: sanitize both brand and model to an allowlist of safe characters, then verify the resolved path is still under `BLOB_ROOT`.
+Mitigation is **validation + containment checks**, not string rewriting. The helpers now live in `app/storage.py` and are used by the ingest and scrape endpoints:
 
 ```python
-import re
-
-SAFE_PATH_SEGMENT = re.compile(r'^[a-zA-Z0-9_.\-]+$')
-
-def sanitize_path_segment(value: str) -> str:
-    """Strip anything that isn't alphanumeric, underscore, hyphen, or dot."""
-    sanitized = re.sub(r'[^a-zA-Z0-9_.\-]', '_', value)
-    # Collapse runs of underscores and strip leading dots/dashes
-    sanitized = re.sub(r'_+', '_', sanitized).strip('_.-')
-    if not sanitized:
-        raise HTTPException(status_code=400, detail="Invalid brand or model")
-    return sanitized
+from app.storage import sanitize_path_segment, ensure_no_traversal, is_within_blob_root
 
 # In the endpoint handler, before calling ingest:
-brand = sanitize_path_segment(brand.lower())
-normalized_model = sanitize_path_segment(normalize_model(model))
+brand = sanitize_path_segment(brand.lower(), allow_spaces=False)
+ensure_no_traversal(model)  # reject absolute paths, .., empty segments, backslashes, null bytes
+normalized_model = sanitize_path_segment(normalize_model(model), allow_spaces=True)
 
-# After paths_for() returns, verify the resolved path:
-pdf_path, text_path = paths_for(brand, normalized_model, "owner", sha, "appliance")
-if not pdf_path.resolve().is_relative_to(BLOB_ROOT.resolve()):
+# After ingest, verify stored path is under BLOB_ROOT:
+if not is_within_blob_root(doc["local_path"]):
     raise HTTPException(status_code=400, detail="Invalid path")
 ```
+
+Additionally, the API refuses to serve cached or downloaded files if their stored `local_path` or `text_path` is outside `BLOB_ROOT` (defense-in-depth for any existing bad rows).
 
 **A04 — No file size limit:**
 
@@ -157,6 +151,7 @@ async def ingest_manual_upload(brand: str, model: str, request: Request, file: U
 | File is not a valid PDF | 400 `"Invalid PDF file"` |
 | File exceeds 50MB | 413 `"File too large (max 50MB)"` |
 | Brand or model contains invalid characters | 400 `"Invalid brand or model"` |
+| Brand/model attempts traversal (`..`, absolute paths, backslashes, null byte) | 400 `"Invalid brand or model"` |
 | Document already exists for brand/model | 200 with existing document metadata (idempotent) |
 | SQLite write fails | 500 with error message |
 
@@ -181,3 +176,4 @@ One file, one endpoint. All ingestion logic (`validate_and_ingest_manual`, `inge
 5. **Auth** — call without `X-Homekeepr-Ingest` header. Verify 401.
 6. **Path traversal rejection** — upload with brand `../../etc` or model `../../../tmp/evil`. Verify 400.
 7. **Size limit** — upload a file larger than 50MB. Verify 413.
+8. **Path safety tests** — run `python3 scripts/path_safety_tests.py` (all PASS).

@@ -1,5 +1,4 @@
 import logging
-import re
 import sys
 import os
 import shutil
@@ -15,6 +14,7 @@ from starlette.responses import JSONResponse
 
 from .db import init_db, fetch_document, search_documents, get_db
 from .logging_config import setup_logging
+from .storage import ensure_no_traversal, is_within_blob_root, sanitize_path_segment
 
 # Filter out /health requests from uvicorn access logs
 class EndpointFilter(logging.Filter):
@@ -42,8 +42,8 @@ from serpapi_scraper import (
 
 templates = Jinja2Templates(directory="app/templates")
 
-def normalize_model(model):
-    return model.replace('/', '_')
+def normalize_model(model: str) -> str:
+    return model.replace("/", "_").replace("\\", "_")
 
 if not logging.getLogger().handlers:
     setup_logging(os.getenv("LOG_LEVEL", "INFO"))
@@ -63,9 +63,6 @@ if SCRAPER_SECRET == None or SCRAPER_SECRET == "":
 SCRAPER_INGEST_SECRET = os.getenv("SCRAPER_INGEST_SECRET", "")
 if not SCRAPER_INGEST_SECRET:
     logging.getLogger("serpapi.api").warning("SCRAPER_INGEST_SECRET not set; /ingest endpoint is disabled")
-
-# Path segment allowlist for brand/model to prevent path traversal (A03)
-SAFE_PATH_SEGMENT = re.compile(r'^[a-zA-Z0-9_.\-]+$')
 
 # Max upload size for manual ingest (50MB)
 MAX_INGEST_SIZE = 50 * 1024 * 1024
@@ -183,18 +180,27 @@ async def ingest_manual_upload(brand: str, model: str, request: Request, file: U
         raise HTTPException(status_code=401, detail="Unauthorized")
 
     # Sanitize brand and model to prevent path traversal (A03)
-    brand = brand.lower().strip()
-    normalized_model = normalize_model(model).strip()
-    if not SAFE_PATH_SEGMENT.match(brand):
-        raise HTTPException(status_code=400, detail="Invalid brand")
-    if not SAFE_PATH_SEGMENT.match(normalized_model):
-        raise HTTPException(status_code=400, detail="Invalid model")
+    try:
+        brand = sanitize_path_segment(brand.lower(), allow_spaces=False)
+        ensure_no_traversal(model)
+        normalized_model = sanitize_path_segment(normalize_model(model), allow_spaces=True)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid brand or model")
 
     # Validate file presence
     if not file or not file.filename:
         raise HTTPException(status_code=400, detail="file is required")
 
-    # Read file with size limit enforcement
+    # Reject early if Content-Length is over the limit, then verify during read
+    content_length = request.headers.get("content-length")
+    if content_length:
+        try:
+            if int(content_length) > MAX_INGEST_SIZE:
+                raise HTTPException(status_code=413, detail="File too large (max 50MB)")
+        except ValueError:
+            pass
+
+    # Read file with size limit enforcement (trust but verify)
     contents = await file.read(MAX_INGEST_SIZE + 1)
     if len(contents) > MAX_INGEST_SIZE:
         raise HTTPException(status_code=413, detail="File too large (max 50MB)")
@@ -226,13 +232,10 @@ async def ingest_manual_upload(brand: str, model: str, request: Request, file: U
             raise HTTPException(status_code=500, detail="Failed to ingest document")
 
         # Verify the resolved storage path is under BLOB_ROOT (A03 defense in depth)
-        from .config import BLOB_ROOT
         doc = fetch_document(ingest_result.id)
         if doc and doc.get("local_path"):
-            from pathlib import Path
-            resolved = Path(doc["local_path"]).resolve()
-            if not str(resolved).startswith(str(BLOB_ROOT.resolve())):
-                logger.error(f"Path traversal detected: {resolved} is outside {BLOB_ROOT}")
+            if not is_within_blob_root(doc["local_path"]):
+                logger.error("Path traversal detected: %s is outside BLOB_ROOT", doc["local_path"])
                 raise HTTPException(status_code=400, detail="Invalid path")
 
         logger.info(f"Admin ingest: brand={brand} model={normalized_model} doc_id={ingest_result.id}")
@@ -308,6 +311,9 @@ def download_document(doc_id: int):
     path = doc.get("local_path")
     if not path:
         raise HTTPException(status_code=404, detail="File not stored locally")
+    if not is_within_blob_root(path):
+        logger.error("Refusing to serve local_path outside BLOB_ROOT: %s", path)
+        raise HTTPException(status_code=404, detail="File not stored locally")
     return FileResponse(path, media_type="application/pdf")
 
 
@@ -321,7 +327,7 @@ def get_document_text(doc_id: int):
         raise HTTPException(status_code=404, detail="Not found")
 
     text_path = doc.get("text_path")
-    if text_path and os.path.exists(text_path):
+    if text_path and is_within_blob_root(text_path) and os.path.exists(text_path):
         with gzip.open(text_path, "rt", encoding="utf-8") as f:
             text = f.read()
         return PlainTextResponse(text)
@@ -345,7 +351,10 @@ def _get_cached_local_path(brand: str, normalized_model: str) -> Optional[str]:
         .fetchone()
     )
     if doc:
-        return doc[1]
+        path = doc[1]
+        if path and is_within_blob_root(path):
+            return path
+        logger.error("Refusing cached path outside BLOB_ROOT: %s", path)
     return None
 
 
@@ -410,6 +419,9 @@ def _ingest_and_get_local_path(brand: str, normalized_model: str, scrape_payload
 
     result = scrape_payload["data"]
     brand_supported = scrape_payload["brand_supported"]
+    if isinstance(result, dict):
+        result["brand"] = brand
+        result["model_number"] = normalized_model
 
     if brand_supported:
         if brand == "ge":
@@ -476,8 +488,12 @@ def scrape_brand_model(brand: str, model: str, request: Request):
     req_id = getattr(request.state, "req_id", os.urandom(4).hex())
     logger.info(f"[{req_id}] Processing scrape endpoint for {brand}/{model}")
     
-    brand = brand.lower()
-    normalized_model = normalize_model(model)
+    try:
+        brand = sanitize_path_segment(brand.lower(), allow_spaces=False)
+        ensure_no_traversal(model)
+        normalized_model = sanitize_path_segment(normalize_model(model), allow_spaces=True)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid brand or model")
     cached_path = _get_cached_local_path(brand, normalized_model)
     if cached_path:
         logger.info(f"[{req_id}] Found cached document")
