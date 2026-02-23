@@ -224,3 +224,6 @@ __marimo__/
 .streamlit/secrets.toml
 
 launch_local.sh
+
+*.db-shm
+*.db-wal
