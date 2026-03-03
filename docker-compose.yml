@@ -47,8 +47,15 @@ services:
       retries: 3
       start_period: 40s
     networks:
-      - internal                          # Can reach squid proxies
-      - documentation-scraper-network     # Reachable by Caddy reverse proxy
+      internal:                           # Can reach squid proxies
+      documentation-scraper-network:      # Reachable by Caddy reverse proxy
+        aliases:
+          # Local include file names containers homekeeper-app-*.
+          # These aliases let Caddy resolve the VPS-style hostnames.
+          - documentation-scraper-app-1
+          - documentation-scraper-app-2
+          - documentation-scraper-app-3
+          - documentation-scraper-app-4
     depends_on:
       - squid-proxy-a
       - squid-proxy-b

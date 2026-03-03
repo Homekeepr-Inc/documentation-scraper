@@ -2,17 +2,19 @@ import logging
 import sys
 import os
 import shutil
+import tempfile
 import threading
 from queue import Queue
 from typing import Optional, Tuple
 
-from fastapi import FastAPI, HTTPException, Request, Response
+from fastapi import FastAPI, HTTPException, Request, Response, UploadFile, File
 from fastapi.responses import FileResponse, PlainTextResponse, HTMLResponse
 from fastapi.templating import Jinja2Templates
 from starlette.responses import JSONResponse
 
 from .db import init_db, fetch_document, search_documents, get_db
 from .logging_config import setup_logging
+from .storage import ensure_no_traversal, is_within_blob_root, sanitize_path_segment
 
 # Filter out /health requests from uvicorn access logs
 class EndpointFilter(logging.Filter):
@@ -40,8 +42,8 @@ from serpapi_scraper import (
 
 templates = Jinja2Templates(directory="app/templates")
 
-def normalize_model(model):
-    return model.replace('/', '_')
+def normalize_model(model: str) -> str:
+    return model.replace("/", "_").replace("\\", "_")
 
 if not logging.getLogger().handlers:
     setup_logging(os.getenv("LOG_LEVEL", "INFO"))
@@ -55,6 +57,15 @@ logger = logging.getLogger("serpapi.api")
 SCRAPER_SECRET = os.getenv("SCRAPER_SECRET")
 if SCRAPER_SECRET == None or SCRAPER_SECRET == "":
     raise ValueError("**Security Violation**: SCRAPER_SECRET is an empty string or null!")
+
+# Separate secret for the /ingest endpoint (admin manual uploads).
+# Not fatal if missing — the endpoint is simply disabled.
+SCRAPER_INGEST_SECRET = os.getenv("SCRAPER_INGEST_SECRET", "")
+if not SCRAPER_INGEST_SECRET:
+    logging.getLogger("serpapi.api").warning("SCRAPER_INGEST_SECRET not set; /ingest endpoint is disabled")
+
+# Max upload size for manual ingest (50MB)
+MAX_INGEST_SIZE = 50 * 1024 * 1024
 
 # Toggle to enable/disable SerpApi globally. Default to enabled.
 SERPAPI_ENABLED = os.getenv("SERPAPI_ENABLED", "true").strip().lower() not in {"false", "0", "no", ""}
@@ -130,8 +141,9 @@ async def log_request_arrival(request: Request, call_next):
 
 @app.middleware("http")
 async def check_custom_header(request: Request, call_next):
-    # Bypass header check for health check endpoints (internal)
-    if request.url.path in ["/health", "/status"]:
+    # Bypass header check for health, status, and /ingest endpoints.
+    # /ingest has its own auth (SCRAPER_INGEST_SECRET) checked in the handler.
+    if request.url.path in ["/health", "/status"] or request.url.path.startswith("/ingest"):
         response = await call_next(request)
         return response
     header_value = request.headers.get("X-Homekeepr-Scraper")
@@ -149,6 +161,97 @@ def _startup() -> None:
 @app.get("/health")
 def health() -> dict:
     return {"status": "ok"}
+
+
+@app.post("/ingest/{brand}/{model:path}")
+async def ingest_manual_upload(brand: str, model: str, request: Request, file: UploadFile = File(...)):
+    """Accept a PDF upload from the admin portal and insert it into the scraper's
+    SQLite database. The next GET /scrape/{brand}/{model} call will find it in
+    the cache and return it immediately — no web scraping needed.
+
+    Auth: requires X-Homekeepr-Ingest header with the SCRAPER_INGEST_SECRET.
+    This is separate from the general X-Homekeepr-Scraper secret.
+    """
+    # Auth — disabled if SCRAPER_INGEST_SECRET is not configured
+    if not SCRAPER_INGEST_SECRET:
+        raise HTTPException(status_code=404, detail="Not found")
+    ingest_header = request.headers.get("X-Homekeepr-Ingest") or ""
+    if ingest_header != SCRAPER_INGEST_SECRET:
+        raise HTTPException(status_code=401, detail="Unauthorized")
+
+    # Sanitize brand and model to prevent path traversal (A03)
+    try:
+        brand = sanitize_path_segment(brand.lower(), allow_spaces=False)
+        ensure_no_traversal(model)
+        normalized_model = sanitize_path_segment(normalize_model(model), allow_spaces=True)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid brand or model")
+
+    # Validate file presence
+    if not file or not file.filename:
+        raise HTTPException(status_code=400, detail="file is required")
+
+    # Reject early if Content-Length is over the limit, then verify during read
+    content_length = request.headers.get("content-length")
+    if content_length:
+        try:
+            if int(content_length) > MAX_INGEST_SIZE:
+                raise HTTPException(status_code=413, detail="File too large (max 50MB)")
+        except ValueError:
+            pass
+
+    # Read file with size limit enforcement (trust but verify)
+    contents = await file.read(MAX_INGEST_SIZE + 1)
+    if len(contents) > MAX_INGEST_SIZE:
+        raise HTTPException(status_code=413, detail="File too large (max 50MB)")
+
+    # Validate PDF magic bytes
+    if not contents[:5].startswith(b'%PDF-'):
+        raise HTTPException(status_code=400, detail="Invalid PDF file")
+
+    # Write to temp file for the existing ingestion pipeline
+    temp_dir = None
+    try:
+        temp_dir = tempfile.mkdtemp(prefix="ingest_upload_")
+        temp_pdf_path = os.path.join(temp_dir, f"{brand}_{normalized_model}_manual.pdf")
+        with open(temp_pdf_path, 'wb') as f:
+            f.write(contents)
+
+        result_dict = {
+            "brand": brand,
+            "model_number": normalized_model,
+            "doc_type": "owner",
+            "title": f"{brand} {normalized_model} Owner's Manual (admin upload)",
+            "source_url": "admin_upload",
+            "file_url": "admin_upload",
+            "local_path": temp_pdf_path,
+        }
+
+        ingest_result = validate_and_ingest_manual(result_dict)
+        if not ingest_result or not ingest_result.id:
+            raise HTTPException(status_code=500, detail="Failed to ingest document")
+
+        # Verify the resolved storage path is under BLOB_ROOT (A03 defense in depth)
+        doc = fetch_document(ingest_result.id)
+        if doc and doc.get("local_path"):
+            if not is_within_blob_root(doc["local_path"]):
+                logger.error("Path traversal detected: %s is outside BLOB_ROOT", doc["local_path"])
+                raise HTTPException(status_code=400, detail="Invalid path")
+
+        logger.info(f"Admin ingest: brand={brand} model={normalized_model} doc_id={ingest_result.id}")
+
+        return JSONResponse(content={
+            "id": ingest_result.id,
+            "sha256": ingest_result.sha256,
+            "pages": ingest_result.pages,
+            "size_bytes": ingest_result.size_bytes,
+            "english_present": ingest_result.english_present,
+        })
+
+    finally:
+        # Clean up temp directory
+        if temp_dir and os.path.exists(temp_dir):
+            shutil.rmtree(temp_dir, ignore_errors=True)
 
 
 @app.get("/status")
@@ -208,6 +311,9 @@ def download_document(doc_id: int):
     path = doc.get("local_path")
     if not path:
         raise HTTPException(status_code=404, detail="File not stored locally")
+    if not is_within_blob_root(path):
+        logger.error("Refusing to serve local_path outside BLOB_ROOT: %s", path)
+        raise HTTPException(status_code=404, detail="File not stored locally")
     return FileResponse(path, media_type="application/pdf")
 
 
@@ -221,7 +327,7 @@ def get_document_text(doc_id: int):
         raise HTTPException(status_code=404, detail="Not found")
 
     text_path = doc.get("text_path")
-    if text_path and os.path.exists(text_path):
+    if text_path and is_within_blob_root(text_path) and os.path.exists(text_path):
         with gzip.open(text_path, "rt", encoding="utf-8") as f:
             text = f.read()
         return PlainTextResponse(text)
@@ -245,7 +351,10 @@ def _get_cached_local_path(brand: str, normalized_model: str) -> Optional[str]:
         .fetchone()
     )
     if doc:
-        return doc[1]
+        path = doc[1]
+        if path and is_within_blob_root(path):
+            return path
+        logger.error("Refusing cached path outside BLOB_ROOT: %s", path)
     return None
 
 
@@ -310,6 +419,9 @@ def _ingest_and_get_local_path(brand: str, normalized_model: str, scrape_payload
 
     result = scrape_payload["data"]
     brand_supported = scrape_payload["brand_supported"]
+    if isinstance(result, dict):
+        result["brand"] = brand
+        result["model_number"] = normalized_model
 
     if brand_supported:
         if brand == "ge":
@@ -376,8 +488,12 @@ def scrape_brand_model(brand: str, model: str, request: Request):
     req_id = getattr(request.state, "req_id", os.urandom(4).hex())
     logger.info(f"[{req_id}] Processing scrape endpoint for {brand}/{model}")
     
-    brand = brand.lower()
-    normalized_model = normalize_model(model)
+    try:
+        brand = sanitize_path_segment(brand.lower(), allow_spaces=False)
+        ensure_no_traversal(model)
+        normalized_model = sanitize_path_segment(normalize_model(model), allow_spaces=True)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid brand or model")
     cached_path = _get_cached_local_path(brand, normalized_model)
     if cached_path:
         logger.info(f"[{req_id}] Found cached document")
