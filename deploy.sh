@@ -20,7 +20,19 @@ echo "🔨 Building new app image..."
 # Keep supply-chain attestations enabled (SBOM + provenance), but avoid
 # the Compose metadata temp-file path that can fail on some VPS hosts.
 APP_IMAGE=$(docker compose config --images | grep -m1 -E '(^|-)app$')
+BUILDER_NAME=${BUILDER_NAME:-scraper-attest-builder}
+
+# The default docker driver on some VPS hosts cannot emit attestations.
+# Use docker-container driver so --provenance/--sbom is supported.
+if docker buildx inspect "${BUILDER_NAME}" >/dev/null 2>&1; then
+  docker buildx use "${BUILDER_NAME}"
+else
+  docker buildx create --name "${BUILDER_NAME}" --driver docker-container --use
+fi
+docker buildx inspect --bootstrap >/dev/null
+
 docker buildx build \
+  --builder "${BUILDER_NAME}" \
   --platform linux/amd64 \
   --pull \
   --provenance=true \
