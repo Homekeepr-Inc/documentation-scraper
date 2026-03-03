@@ -24,6 +24,11 @@ TMPDIR=${TMPDIR:-/var/tmp/documentation-scraper}
 mkdir -p "${TMPDIR}"
 export TMPDIR
 
+# Force Compose to use the default builder and remove the custom attest builder if present.
+unset BUILDX_BUILDER
+docker buildx use default >/dev/null 2>&1 || true
+docker buildx rm -f scraper-attest-builder >/dev/null 2>&1 || true
+
 docker compose build --pull app
 
 # Scale up to 8 replicas (4 old + 4 new) for zero downtime
