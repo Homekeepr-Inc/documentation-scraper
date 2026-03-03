@@ -17,11 +17,21 @@ git pull
 
 # Build new app image
 echo "🔨 Building new app image..."
-docker compose build app
+# Keep supply-chain attestations enabled (SBOM + provenance), but avoid
+# the Compose metadata temp-file path that can fail on some VPS hosts.
+APP_IMAGE=$(docker compose config --images | grep -m1 -E '(^|-)app$')
+docker buildx build \
+  --platform linux/amd64 \
+  --pull \
+  --provenance=true \
+  --sbom=true \
+  --tag "${APP_IMAGE}:latest" \
+  --load \
+  .
 
 # Scale up to 8 replicas (4 old + 4 new) for zero downtime
 echo "🔄 Scaling up to 8 app instances"
-docker compose up --scale app=8 -d
+docker compose up --scale app=8 -d --no-build
 
 # Wait for all app containers to be healthy
 echo "⏳ Waiting for all app containers to be healthy..."
@@ -33,7 +43,7 @@ echo "✅ All app containers are healthy"
 
 # Scale down to 4 replicas (remove old ones)
 echo "🔄 Scaling down to 4 app instances"
-docker compose up --scale app=4 -d --no-deps app
+docker compose up --scale app=4 -d --no-deps --no-build app
 
 # Clean up old images (optional)
 echo "🧹 Cleaning up old images..."
