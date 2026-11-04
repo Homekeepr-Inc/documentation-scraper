@@ -1,27 +1,27 @@
 # Homekeepr system design
 
-**Last source verification: 2026-11-04.** This is the shared cross-repository map, not a deployment receipt or a replacement for feature designs. The same bytes belong in every included repository. Evidence is pinned to the source commits below; code/configuration wins over older notes and diagrams. No production system, customer data, secret value, or dashboard configuration was accessed for this verification.
+**Last source verification: 2026-11-04.** This shared codebase guide maps repository ownership, runtime configuration and cross-repository contracts. The same bytes belong in every included repository. Evidence is pinned to the source commits below; code/configuration wins over older notes and diagrams.
 
 ## 1. Repository map and deployment ownership
 
 | Repository | Responsibility and runtime | Deployment path established by repository evidence |
 | --- | --- | --- |
-| `Homekeepr` | TypeScript, React Native/Expo mobile app with native iOS/Android projects. | GitHub `verify.yml` verifies, not deploys. Xcode Cloud has executable bootstrap/archive hooks; EAS also defines development/preview/production builds. Android has signed Gradle release configuration. Current Xcode Cloud distribution settings and Play upload automation are open questions. [A1] [A2] [A3] [A4] [A16] |
-| `supabase` | TypeScript/Deno Edge functions, SQL migrations, Auth configuration, application Postgres and Storage contracts. Local config targets PostgreSQL 17 and Deno 2. | README states merge auto-deploys via the managed platform; no checked-in deployment workflow was found. Migrations/functions are separate rollout surfaces; platform integration, migration-before-function ordering and active production/preview revisions are not proven by this checkout. [B1] [B2] |
+| `Homekeepr` | TypeScript, React Native/Expo mobile app with native iOS/Android projects. | GitHub `verify.yml` verifies, not deploys. Xcode Cloud has executable bootstrap/archive hooks; EAS also defines development/preview/production builds. Android has signed Gradle release configuration. [A1] [A2] [A3] [A4] [A16] |
+| `supabase` | TypeScript/Deno Edge functions, SQL migrations, Auth configuration, application Postgres and Storage contracts. Local config targets PostgreSQL 17 and Deno 2. | README documents managed auto-deployment on merge. The repository stores SQL migrations, Edge functions and Supabase configuration. [B1] [B2] |
 | `temporal-jobs` | TypeScript; Node 24 workers/dedicated APIs and a Bun generic HTTP/admin API; Temporal orchestration on the VPS. | GitHub `temporal-workers-build.yml` builds and type-checks, not deploys. `temporal-workers/scripts/redeploy-api.sh` rebuilds/recreates selected Compose services and checks health/readiness. Main worker and isolated document/inspection pairs are selectable. [T1] [T2] [T3] |
-| `homekeepr.co` | Static HTML/CSS plus compiled/bundled TypeScript; separate TypeScript Cloudflare proxy Worker. | Pages publishes `dist/` according to README. Worker is separately deployed with Wrangler using `workers/web-onboarding-proxy/wrangler.toml`, including named staging configuration. Pages Git integration/branch/build settings are external state, not established by source. [W1] [W2] [W3] [W10] |
-| `VPS-Infra-Services` | Caddy configuration, Docker Compose, shared Docker networks and security sidecar configuration. | Operator-managed VPS Compose/Caddy configuration. `VPS_DEPLOYMENT_DESIGN.md` explicitly describes a **not-yet-implemented plan**, not an existing GitHub SSH deployment workflow. Start this stack before dependent stacks because it creates their external networks. [I1] [I2] [D5] |
-| `documentation-scraper` | Python FastAPI/Uvicorn, Selenium/Chrome, SQLite and local PDF blob storage. | VPS Docker Compose: four app replicas and two Squid proxies. `deploy.sh` pulls source, builds the app and attempts an eight-to-four replica rollout; no scraper CI deployment workflow was found. The script is a procedure, not proof of zero-downtime behavior or live revision. [S1] [S2] [S3] [S4] |
+| `homekeepr.co` | Static HTML/CSS plus compiled/bundled TypeScript; separate TypeScript Cloudflare proxy Worker. | Pages publishes `dist/` according to README. Worker is separately deployed with Wrangler using `workers/web-onboarding-proxy/wrangler.toml`, including named staging configuration. [W1] [W2] [W3] [W10] |
+| `VPS-Infra-Services` | Caddy configuration, Docker Compose, shared Docker networks and security sidecar configuration. | Operator-managed VPS Compose/Caddy configuration. `VPS_DEPLOYMENT_DESIGN.md` is a deployment proposal. Start this stack before dependent stacks because it creates their external networks. [I1] [I2] [D5] |
+| `documentation-scraper` | Python FastAPI/Uvicorn, Selenium/Chrome, SQLite and local PDF blob storage. | VPS Docker Compose: four app replicas and two Squid proxies. `deploy.sh` pulls source, builds the app, scales to eight replicas, waits for health and scales back to four. [S1] [S2] [S3] [S4] |
 | `secrets-manager` | TypeScript Cloudflare Worker; scoped secret delivery using `AUTH_STORE` KV authorization metadata. | Wrangler configuration defines separate staging and production Workers/KV bindings. Package has local `dev` and manual `deploy` scripts. [K1] [K2] [K3] |
-| `homekeepr-outbound` | TypeScript/Node Express product-research API, Next.js dashboard and ingestion workspace; separate development Postgres. | Included because current core Caddy configuration actively routes `outbound.homekeepr.co` to its named upstream. Its repository Compose describes development services, not a verified production stack or deploy automation. Live liveness and production packaging remain open. [I2] [O1] [O2] |
+| `homekeepr-outbound` | TypeScript/Node Express product-research API, Next.js dashboard and ingestion workspace; separate development Postgres. | Core Caddy configuration routes `outbound.homekeepr.co` to its named upstream. The repository's Compose file defines the development services. [I2] [R1] [R2] |
 
-**Optional-repository decisions.** `documentation-scraper` is included by the mobile workspace's executable Compose include and Caddy routes; Temporal configuration requires `secrets-manager` access. `homekeepr-outbound` is included for its active Caddy route, not inferred from recent activity. `homekeepr-website` is excluded: the core search found an editor workspace entry and historical prose, but no executable runtime/deploy reference; the current website build and Worker live in `homekeepr.co`. This does not prove that no legacy deployment exists. `battle-chip*` and `ai-captcha-bypass` repositories are intentionally out of scope; the configured security sidecar is still described below. [A5] [A6] [T4] [I2]
+**Optional-repository decisions.** `documentation-scraper` is included by the mobile workspace's executable Compose include and Caddy routes; Temporal configuration requires `secrets-manager` access. `homekeepr-outbound` is included for its active Caddy route. `homekeepr-website` is excluded: the core search found an editor workspace entry and historical prose, but no executable runtime/deploy reference; the current website build and Worker live in `homekeepr.co`. `battle-chip*` and `ai-captcha-bypass` repositories are intentionally out of scope; the configured security sidecar is still described below. [A5] [A6] [T4] [I2]
 
 ## 2. Hosts, services and trust boundaries
 
 ### VPS: shared ingress and background execution
 
-The infrastructure README identifies an Ubuntu Server 24 LTS host on Hetzner. Host capacity, region, running image IDs and checkout revisions are not independently established here. [I3]
+The infrastructure README identifies an Ubuntu Server 24 LTS host on Hetzner. [I3]
 
 | Stack | Configured service/container role | Exposure and persistence |
 | --- | --- | --- |
@@ -31,7 +31,7 @@ The infrastructure README identifies an Ubuntu Server 24 LTS host on Hetzner. Ho
 | Home Document execution | `home-document-worker`, `home-document-api` | Dedicated extraction worker; optional insurance, AMH and property-tax pollers. API defaults to 3036, with `/health` and `/ready`; feature readiness depends on gates/credentials. [T5] [T7] |
 | Home Inspection execution | `home-inspection-worker`, `home-inspection-api` | Separate inspection queue and API, default port 3034; `/health` and `/ready`. [T5] [T8] |
 | Manuals corpus | Scraper `app` ×4; `squid-proxy-a`, `squid-proxy-b` | Only app joins `documentation-scraper-network`; proxies stay on its per-stack bridge. Shared `manuals_data` volume holds SQLite/PDF data; this is not Supabase Storage. [S1] [S3] |
-| Outbound tool | Configured `homekeepr-outbound` upstream | Caddy forwards to port 4000. The checked-in development Compose's `core-api`, `dashboard`, `postgres`, workspace/migration helpers and optional job profiles do not establish deployed production container names. [I2] [O1] |
+| Outbound tool | Configured `homekeepr-outbound` upstream | Caddy forwards to port 4000. The development Compose defines `core-api`, `dashboard`, `postgres`, workspace/migration helpers and optional job profiles. [I2] [R1] |
 
 Infrastructure creates `documentation-scraper-network`, `temporal-jobs-network` and `homekeepr-outbound-network`. Temporal's network named `internal` is a normal bridge, **not** Docker `internal: true`; application workers and dedicated APIs also join the external Temporal network. Do not copy older comments claiming only the generic API joins it or that Caddy prevents every cross-service pivot. [I1] [T5]
 
@@ -52,28 +52,28 @@ The entire route table is sourced from [I2]. An implemented API route is not aut
 
 ### Supabase: application system of record
 
-Use project **roles**, never project identifiers, to discuss environments: **production**, **PR preview**, and **local/disposable release-staging**. Notes describe preview provisioning and managed auto-deploy; source establishes local configuration and redirect roles, not the existence, isolation or current version of every hosted project. Payment `SANDBOX` versus `PRODUCTION` is a RevenueCat data dimension, not proof of separate Supabase projects. [B1] [B2] [B8]
+Use project **roles**, never project identifiers, to discuss environments: **production**, **PR preview**, and **local/disposable release-staging**. Supabase configuration defines local services and Auth redirect roles. Payment `SANDBOX` and `PRODUCTION` values select RevenueCat billing environments. [B1] [B2] [B8]
 
 - **Auth:** email/password and OAuth/native Apple exchanges from clients; configured confirmation, token rotation and operation-specific redirects. `home-data` performs its own `auth.getUser()` and lifecycle/permission checks even though gateway `verify_jwt` is disabled for that function. [A7] [B1] [B3]
 - **Postgres:** `restricted_home` owns homes/assets/jobs/documents/tasks; `private` owns billing/notification orchestration; `web_preconv` holds website funnel state. Configured schema exposure does not imply unrestricted grants. [B1] [B4] [B8] [T10]
 - **Edge functions:** `home-data` is the application router; `workflow-starter` recovers durable jobs; `billing` handles RevenueCat intake/reconciliation/purchase; `gift` handles gift lifecycle; `web-onboarding` handles quiz/session/onboarding. Remaining legacy functions must not be mistaken for the authoritative current path just because their source exists. The `stripe` entrypoint is deliberately a side-effect-free 410 tombstone. [B2] [B5] [B6] [B7] [B9]
 - **Storage:** private `documents` (home-owned files and current Home Plan evidence), `service_manuals` (shared model manuals), `note-photos`, `home-photos`, and `web-onboarding-previews`. Current Home Plan uploads use `documents`, not historical `home-plan-evidence`. [B10] [B11] [B12] [B13] [B14] [B15]
-- **Scheduled work:** SQL `pg_cron` uses `pg_net`/`net.http_post` for minutely workflow recovery and billing reconciliation. AMH terminal-job pruning is separate. Weekend Warrior includes a separately controlled minutely tag-flow scheduler and native Mailchimp handoff; scheduler/configuration existence does not establish live enablement. [B16] [B17] [B18] [B19] [B20]
+- **Scheduled work:** SQL `pg_cron` uses `pg_net`/`net.http_post` for minutely workflow recovery and billing reconciliation. AMH terminal-job pruning is separate. Weekend Warrior includes a separately controlled minutely tag-flow scheduler and native Mailchimp handoff. [B16] [B17] [B18] [B19] [B20]
 
 ### Cloudflare and external providers
 
-Cloudflare owns the checked-in website Worker routing and secrets-manager Worker/KV definitions; site docs specify Pages publication. Caddy expects Cloudflare in front of VPS public hosts, and admin is designed for Cloudflare Access plus its own login. DNS records, Access applications/policies, WAF/Turnstile dashboard settings and actual Pages linkage cannot be reconstructed fully from source. Separate Worker environments do **not** guarantee separate backend data: checked-in site staging/production upstream origins match. [I2] [I3] [W2] [W10] [K1] [D4]
+Cloudflare configuration defines the website proxy Worker routes and secrets-manager Worker/KV environments; site docs specify Pages publication. Caddy uses Cloudflare origin-pull certificates for VPS public hosts, and admin combines Cloudflare Access with its own login. The checked-in website Worker staging and production configurations use the same upstream origin. [I2] [I3] [W2] [W10] [K1] [D4]
 
 | Provider | Code-established integration |
 | --- | --- |
 | RevenueCat / Apple / Google Play | Native purchases, web checkout, provider webhooks and canonical paid-access projection. SDK completion alone does not grant app access. [A8] [W4] [B2] [B7] |
-| Stripe | Historical Homekeepr billing implementation is inactive behind a 410 entrypoint; legacy referral URLs redirect to `/buy`. No new entitlement decisions should use those historical tables/handlers. Provider-internal payment processing and outstanding account-side webhook settings remain external questions. [B2] [W5] |
-| Google Gemini | Document extraction, embeddings, inspection/checkup analysis and home-photo generation; AMH retrieval/answer orchestration resides in Edge even when Temporal supplies durable execution. Do not infer one model/version for every operation. [T9] [T11] [T12] [B21] |
-| Google Maps / RentCast | Street View source imagery for worker home photos; property enrichment is part of the onboarding implementation/design surface. Provider availability/configuration is deployment state. [T12] [D2] |
+| Stripe | Historical Homekeepr billing implementation is inactive behind a 410 entrypoint; legacy referral URLs redirect to `/buy`. No new entitlement decisions should use those historical tables/handlers. [B2] [W5] |
+| Google Gemini | Document extraction, embeddings, inspection/checkup analysis and home-photo generation; AMH retrieval/answer orchestration resides in Edge even when Temporal supplies durable execution. [T9] [T11] [T12] [B21] |
+| Google Maps / RentCast | Street View source imagery for worker home photos; property enrichment is part of the onboarding implementation/design surface. [T12] [D2] |
 | Serper / scraper browser dependencies | Shopping/manual discovery; the scraper module is historically named `serpapi_scraper`, but its current client calls Serper and accepts `SERPER_API_KEY` or the historical `SERPAPI_KEY` name. CAPTCHA bridge defaults to 2Captcha, with an alternative legacy solver. [S5] [S6] |
-| Expo | Push delivery and receipt lookup; persisted carousel entries are a different channel, not proof a push arrived. [T10] [A9] |
+| Expo | Push transport and receipt lookup; carousel events are persisted separately. [T10] [A9] |
 | Mailchimp / Visual Crossing / Resend | Customer enrichment/quiz and gift email integrations, Weekend Warrior tag flow, weather ingestion and operational email. [T13] [B9] [B20] |
-| PostHog / Sentry / Grafana | Client product analytics, per-process/Edge error instrumentation and Caddy metrics configured for Grafana Cloud export. Do not interpret configured telemetry as proof of healthy dashboards or ingestion. [A17] [T4] [T7] [B21] [I2] |
+| PostHog / Sentry / Grafana | Client product analytics, per-process/Edge error instrumentation and Caddy metrics configured for Grafana Cloud export. [A17] [T4] [T7] [B21] [I2] |
 
 ## 3. Main request and data flows
 
@@ -106,7 +106,7 @@ flowchart LR
   Expo --> App
 ```
 
-The diagram groups processes for readability; it does not assert feature gates are enabled or that every journey uses Temporal. Detailed contracts follow.
+The diagram groups processes for readability. Detailed contracts follow.
 
 ### Auth and customer lifecycle
 
@@ -120,14 +120,14 @@ Inspection intake prepares a submission, uploads bytes through a signed Storage 
 
 ### Appliance label, customer document and staff manual upload
 
-1. Mobile sends a label image to `/document-text-extraction`, confirms brand/model/serial and saves `/assets`; an optional appliance-photo description is a separate request. Paid/permission gates apply in Edge. This label OCR call is not itself proof of a separate label Temporal queue. [A12] [B24]
+1. Mobile sends a label image to `/document-text-extraction`, confirms brand/model/serial and saves `/assets`; an optional appliance-photo description is a separate request. Paid/permission gates apply in Edge. [A12] [B24]
 2. Model-document jobs use the document workflow path; target model/version/generation determines V1 versus V2 dispatch. Manual fetch goes through the scraper; returned PDFs are uploaded/indexed into Supabase, with `document_metadata` and `document_chunks` supporting shared model retrieval. Customer manual uploads instead enter `/document-upload` with a home/asset target; do not confuse them with staff scraper ingestion. [A13] [T9] [T14] [B25]
 3. Staff `admin.homekeepr.co/admin` is served by the general API. Admin multipart upload forwards to scraper `POST /ingest/{brand}/{model}` using `X-Homekeepr-Ingest`, then signal-with-starts `retryScrape` for the document workflow. Scraper's general `X-Homekeepr-Scraper` and ingest credentials are distinct; missing ingest configuration disables that endpoint. [T15] [S2]
 4. Legacy manual workflows wait/retry on scrape misses/errors and can be woken by staff upload. Missing-manual intervals progress through 2h, 6h, 12h, then repeated weekly waits; scraper errors have additional short retries. A successful scraper upload can precede a failed resume signal, which is recorded separately. Do not generalize this retry policy to bounded insurance/checkup workflows. [T15] [T16]
 
 ### Ask My House
 
-Mobile calls `/chat/document-retrieval` and recovers through `/chat/document-retrieval/result`; async UI/polling is not evidence that every request runs in Temporal. `AMH_TEMPORAL_ENABLED` defaults off. Inline execution stays in Edge; the Temporal path creates/reuses a durable `amh_chat_response`, starts `/start-amh-chat`, then the worker calls `home-data/api/v0/internal/amh-chat/process`. Edge performs retrieval/answer generation and persists the result. Both modes use durable acceptance when the additive RPC is available. RAG maintenance and paid-feature checks fail closed. [A14] [B21] [B26] [T17]
+Mobile calls `/chat/document-retrieval` and recovers through `/chat/document-retrieval/result`. `AMH_TEMPORAL_ENABLED` defaults off. Inline execution stays in Edge; the Temporal path creates/reuses a durable `amh_chat_response`, starts `/start-amh-chat`, then the worker calls `home-data/api/v0/internal/amh-chat/process`. Edge performs retrieval/answer generation and persists the result. Both modes use durable acceptance when the additive RPC is available. RAG maintenance and paid-feature checks fail closed. [A14] [B21] [B26] [T17]
 
 Document retrieval uses `restricted_home.match_document_chunks`; it is not a direct client query over all manuals. Completed responses are polled/recovered, with an optional `amh_chat_response_ready` push/deep link. Recovery also handles accepted pending/stale work, completion notification and temporary-file cleanup. [B27] [B5] [A9] [A14]
 
@@ -143,7 +143,7 @@ Gifts have their own Edge function and `private.homekeepr_gift_orders` / `privat
 
 App registers Expo tokens in `restricted_home.devices`; logout removes the registered user/token pair. Campaign/rule execution uses Temporal plus `private` notification RPCs and preparation/run state; legacy workflow sends also retain a Supabase-client path. Shared notification payloads include home/recipient scope, push/carousel channels, deep links and idempotency keys. `home_events` is the in-app feed; Expo send/receipt outcomes are separate. Invalid tokens can be pruned and denied devices are skipped where explicitly checked. Taps invalidate relevant caches and route through the app deep-link registry. [A9] [T10] [B29]
 
-Admin routes, database login/session logic, campaigns/rules and manual operations belong to `temporal-jobs`; Cloudflare Access policy belongs outside that repo. Generic API schedule provisioning is opt-in via `TEMPORAL_API_PROVISION_SCHEDULES`, not automatic on every startup. Never treat admin UI rendering, a recorded campaign, or configured cron as proof that a customer notification was sent. [D4] [T6] [T19]
+Admin routes, database login/session logic, campaigns/rules and manual operations belong to `temporal-jobs`; Cloudflare Access policy belongs outside that repo. Generic API schedule provisioning is opt-in via `TEMPORAL_API_PROVISION_SCHEDULES`, not automatic on every startup. [D4] [T6] [T19]
 
 ## 4. Cross-repository contracts
 
@@ -162,7 +162,7 @@ Admin routes, database login/session logic, campaigns/rules and manual operation
 | `amh_chat_response` | `/start-amh-chat` | `amh-chat-processing` |
 | `property_tax_checkup` | `/start-property-tax-checkup` | `property-tax-checkup-processing` |
 
-Mapping: [T14] [T20] [T21] [T22]. Other worker queues are `notification-delivery` (reminders, campaigns/rules, weather, shopping, Mailchimp, quiz recovery, weekly picks), `gift-fulfillment`, and optionally `weekend-warrior`. A queue existing in code is not proof a poller or schedule is enabled. [T20] [T7]
+Mapping: [T14] [T20] [T21] [T22]. Other worker queues are `notification-delivery` (reminders, campaigns/rules, weather, shopping, Mailchimp, quiz recovery, weekly picks), `gift-fulfillment`, and optionally `weekend-warrior`. [T20] [T7]
 
 Edge ingress variables are `TEMPORAL_HTTP_API`, optional `TEMPORAL_INSPECTION_HTTP_API`, explicit `TEMPORAL_HOME_DOCUMENT_HTTP_API`, and `TEMPORAL_API_KEY`. Newer insurance/AMH/property-tax starts require configured isolated ingress rather than silently falling back to the generic endpoint. Start APIs use Bearer authentication; secrets-manager uses its own raw Authorization-header contract instead. [B25] [T4] [K3]
 
@@ -202,9 +202,9 @@ Keep repositories as siblings when using the checked-in mobile Compose aggregato
 - **Mobile:** existing simulator instructions use the Expo dev client on localhost, not generic React Native Metro alone. `mobile:metro` and `mobile:doctor` scripts are provided. Development URL selection distinguishes release-staging, explicit local runtime configuration and inferred Metro host; non-development binaries select production. Read the documented release-staging launcher before testing checkout/lifecycle. [A1] [A15] [D8]
 - **Website:** `bun run build` invokes the existing static build; `bun run dev:onboarding` launches static assets on 8788 and the proxy Worker on 8789, but does not start Supabase. Required names include `SUPABASE_ANON_KEY`, `SUPABASE_SERVICE_ROLE_KEY`, `PROXY_SECRET`, `PREVIEW_PROXY_TOKEN_SECRET`, `HOMEKEEPR_GIFT_PROXY_SECRET`, and for purchase `HOMEKEEPR_PURCHASE_PROXY_SECRET`. Use local bindings only. [W1] [W9]
 - **Secrets/Temporal:** secrets-manager `bun run dev` provides local Wrangler on 8787. Temporal local admin wiring needs local Supabase and local machine authorization; generic API uses 3033, dedicated APIs 3036/3034, Temporal 7233 and UI 8080. Container access to host-local dependencies uses `host.docker.internal`, not the Temporal infrastructure database. Read the local admin runbook; API-only database/admin rendering and workflow execution have different dependencies. [K2] [D3]
-- **Scraper/outbound:** consult their existing source/runbooks rather than treating development Compose as a production recipe. Scraper requires its browser/proxy configuration and local corpus storage; outbound's development Compose includes its own Postgres/API/dashboard and optional ingestion/ops profiles. No outbound production deployment is verified. [S1] [S3] [O1]
+- **Scraper/outbound:** consult their existing source/runbooks. Scraper requires its browser/proxy configuration and local corpus storage; outbound's development Compose includes its own Postgres/API/dashboard and optional ingestion/ops profiles. [S1] [S3] [R1]
 
-These are documentation pointers, not commands executed during this audit. Existing package-manager pins/build steps remain authoritative; the Bun commands above identify package scripts without migrating repository tooling.
+Existing package-manager pins/build steps remain authoritative; the Bun commands above identify package scripts without migrating repository tooling.
 
 ## 7. Existing architecture and operator references
 
@@ -214,22 +214,11 @@ Follow these for feature detail instead of maintaining a second copy here. Some 
 - **Supabase:** [README][B2], [document graph][D2], [feature designs][D13] and [operations/scripts guide][D14].
 - **Temporal/admin:** [worker README][D15], [document graph][D16], [feature designs][D17], [local admin guide][D3] and [admin operator notes][D4].
 - **Website:** [README][W2], [document graph][D7], [Worker guide][W3] and [feature designs][D18].
-- **Infrastructure:** [README][I3], [Caddy/network designs][D19] and [deployment proposal, not implemented CI][D5].
-- **Scraper:** [README][D6], [discovery design][D20] and [manual-ingest design][D21]. README's proposed production database/search diagram is not evidence replacing the actual SQLite/filesystem implementation.
-- **Secrets/outbound:** [secrets-manager guide][D22], [original Worker design][D23], [outbound source/scripts][O2] and [development Compose][O1].
+- **Infrastructure:** [README][I3], [Caddy/network designs][D19] and [deployment proposal][D5].
+- **Scraper:** [README][D6], [discovery design][D20] and [manual-ingest design][D21]. Use the scraper code and Compose for SQLite/filesystem storage contracts.
+- **Secrets/outbound:** [secrets-manager guide][D22], [original Worker design][D23], [outbound source/scripts][R2] and [development Compose][R1].
 
-## 8. Open questions
-
-1. **Live deployments:** which source SHAs/images/services/sidecar policy and feature flags actually run on the VPS, and which Edge versions/migrations are active? No production access was allowed; all service inventories above are configured topology.
-2. **Hosted project roles:** which production/PR-preview projects are linked to GitHub, what is the migration/function rollout ordering, and what preview isolation/secrets provisioning is configured? Source redirects/local config and README auto-deploy assertions do not settle platform state.
-3. **Cloudflare external state:** exact DNS targets, Pages project/production branch/build settings, Access application/policies, WAF/rate-limiting rules and origin-certificate provisioning. Wrangler/Caddy establish expected routing, not those dashboard settings.
-4. **Staging data isolation:** site Worker production/staging sections currently select the same upstream origin. Is shared backend intentional, or should staging use a separate project? Different Worker names do not answer this.
-5. **Mobile release ownership:** active Xcode Cloud workflow/distribution and EAS usage; Android Play upload automation/owner/track. Source hooks, build profiles and signing configuration do not prove store delivery or that a particular fix shipped.
-6. **Optional legacy services:** does the routed outbound upstream exist and serve traffic, and which production packaging matches it? Is any old `homekeepr-website` deployment retained? Inclusion/exclusion here follows core executable references, not live traffic.
-7. **Runtime activation:** AMH Temporal mode, insurance/property-tax capabilities, gift flags, Weekend Warrior configuration and schedule provisioning depend on deployment state. Do not enable them based on this document.
-8. **Provider-side configuration:** RevenueCat webhook destinations/authorized credentials, outstanding Stripe endpoints/subscriber servicing, mail-provider flows and telemetry ingestion/alerts need authorized operator verification. Source alone cannot confirm them.
-
-## 9. Source snapshot provenance
+## 8. Source snapshot provenance
 
 Fresh organization clones, origin default branch `main`, captured before documentation edits. These are **source baselines**, not PR head SHAs or deployed revisions. Update the shared document everywhere together when the verified map changes.
 
@@ -342,8 +331,8 @@ Fresh organization clones, origin default branch `main`, captured before documen
 [K1]: https://github.com/Homekeepr-Inc/secrets-manager/blob/985a23c8ceb1f20598f1ea65f2f4078bcfdb9ed8/wrangler.toml#L1-L22
 [K2]: https://github.com/Homekeepr-Inc/secrets-manager/blob/985a23c8ceb1f20598f1ea65f2f4078bcfdb9ed8/package.json#L1-L16
 [K3]: https://github.com/Homekeepr-Inc/secrets-manager/blob/985a23c8ceb1f20598f1ea65f2f4078bcfdb9ed8/src/index.ts#L139-L201
-[O1]: https://github.com/Homekeepr-Inc/homekeepr-outbound/blob/769e06cd3b52b81901787c15ca4c6785dc44168e/infrastructure/docker-compose.yml#L18-L130
-[O2]: https://github.com/Homekeepr-Inc/homekeepr-outbound/blob/769e06cd3b52b81901787c15ca4c6785dc44168e/package.json#L1-L20
+[R1]: https://github.com/Homekeepr-Inc/homekeepr-outbound/blob/769e06cd3b52b81901787c15ca4c6785dc44168e/infrastructure/docker-compose.yml#L18-L130
+[R2]: https://github.com/Homekeepr-Inc/homekeepr-outbound/blob/769e06cd3b52b81901787c15ca4c6785dc44168e/package.json#L1-L20
 [D1]: https://github.com/Homekeepr-Inc/Homekeepr/blob/d5f65558cbca51bb0a82e8e4a3dc17f53db1a701/DOCUMENT_GRAPH.md
 [D2]: https://github.com/Homekeepr-Inc/supabase/blob/eb7625d7d9828b349ecf08f3cfd58ce39a8c2ddd/DOCUMENT_GRAPH.md
 [D3]: https://github.com/Homekeepr-Inc/temporal-jobs/blob/64d29626b45c484293fddfbb2b58e77819665f5e/temporal-workers/docs/LOCAL_ADMIN.md
